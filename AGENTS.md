@@ -7,4 +7,5 @@
 - Email failures must never roll back a confirmed payment.
 - Staging and test environments must never use Stripe live credentials.
 - Stripe production accounts and credentials belong to Marat's business.
+- Use Node.js 22 or later for local, CI, preview, and production environments.
 - Do not implement out-of-scope features without explicit approval.
