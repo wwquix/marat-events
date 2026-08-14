@@ -1,6 +1,6 @@
 # Marat Events safety rules
 
-- Never expose Stripe secret keys or Supabase service role keys.
+- Never expose Stripe secret keys or privileged Supabase secret keys.
 - Server secrets must never use a `NEXT_PUBLIC_` prefix and must stay on the server.
 - Payment success may eventually be established only from verified Stripe webhooks. A redirect to a success page never proves payment.
 - Eventual webhook processing must be idempotent.
