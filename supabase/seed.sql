@@ -36,13 +36,25 @@ insert into public.ticket_types (
 )
 select
   events.id,
-  'general',
-  'General Admission',
-  'any',
+  tickets.code,
+  tickets.name,
+  tickets.audience,
   events.price_cents,
   events.currency,
-  events.capacity,
-  'active'
-from public.events
+  tickets.capacity,
+  tickets.status
+from public.events as events
+cross join (
+  values
+    ('general', 'General Admission', 'any', 100, 'hidden'),
+    ('men', 'Men Admission', 'male', 50, 'active'),
+    ('women', 'Women Admission', 'female', 50, 'active')
+) as tickets(code, name, audience, capacity, status)
 where events.slug = 'demo-marats-future-event'
-on conflict (event_id, code) do nothing;
+on conflict (event_id, code) do update set
+  name = excluded.name,
+  audience = excluded.audience,
+  price_cents = excluded.price_cents,
+  currency = excluded.currency,
+  capacity = excluded.capacity,
+  status = excluded.status;
