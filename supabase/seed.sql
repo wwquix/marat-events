@@ -24,3 +24,25 @@ values (
 )
 on conflict (slug) do nothing;
 
+insert into public.ticket_types (
+  event_id,
+  code,
+  name,
+  audience,
+  price_cents,
+  currency,
+  capacity,
+  status
+)
+select
+  events.id,
+  'general',
+  'General Admission',
+  'any',
+  events.price_cents,
+  events.currency,
+  events.capacity,
+  'active'
+from public.events
+where events.slug = 'demo-marats-future-event'
+on conflict (event_id, code) do nothing;
