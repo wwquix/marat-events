@@ -4,8 +4,9 @@
 /out
 
 # Local environment files
-.env.local
-.env.*.local
+.env
+.env.*
+!.env.example
 
 # Logs and TypeScript build state
 npm-debug.log*
@@ -16,4 +17,3 @@ pnpm-debug.log*
 
 # Local Supabase runtime data
 supabase/.temp/
-
