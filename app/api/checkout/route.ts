@@ -3,9 +3,12 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   buildCheckoutSessionParams,
   checkoutIdempotencyKey,
+  doesTicketMatchGender,
   isEventAvailableForSale,
   isSoldOut,
+  isTicketAvailableForSale,
   parseCheckoutEvent,
+  parseCheckoutTicketType,
   validateCheckoutInput,
 } from "@/lib/checkout/rules";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
@@ -21,7 +24,10 @@ type CheckoutErrorCode =
 type FailureStage =
   | "read_input"
   | "load_event"
-  | "count_capacity"
+  | "load_ticket"
+  | "count_event_capacity"
+  | "count_ticket_capacity"
+  | "resolve_person"
   | "insert_registration"
   | "create_stripe_session"
   | "store_stripe_session";
@@ -29,6 +35,8 @@ type FailureStage =
 type OperationResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: unknown };
+
+type SupabaseClient = ReturnType<typeof createSupabaseServerClient>;
 
 function logCheckoutFailure(
   stage: FailureStage,
@@ -80,13 +88,89 @@ async function readRequestData(request: NextRequest): Promise<unknown> {
   throw new Error("Unsupported checkout request content type.");
 }
 
-function isInsertedRegistration(value: unknown): value is { id: string } {
+function isIdRow(value: unknown): value is { id: string } {
   return (
     Boolean(value) &&
     typeof value === "object" &&
     typeof (value as Record<string, unknown>).id === "string" &&
     ((value as Record<string, unknown>).id as string).length > 0
   );
+}
+
+async function resolvePerson(
+  supabase: SupabaseClient,
+  input: { fullName: string; email: string; phone: string; gender: "male" | "female" },
+): Promise<OperationResult<string>> {
+  const lookup = await attemptDatabaseOperation(() =>
+    supabase.from("people").select("id").eq("email", input.email).maybeSingle(),
+  );
+
+  if (!lookup.ok) {
+    return lookup;
+  }
+
+  if (lookup.value.error) {
+    return { ok: false, error: lookup.value.error };
+  }
+
+  if (isIdRow(lookup.value.data)) {
+    const update = await attemptDatabaseOperation(() =>
+      supabase
+        .from("people")
+        .update({
+          full_name: input.fullName,
+          phone: input.phone,
+          gender: input.gender,
+        })
+        .eq("id", lookup.value.data.id)
+        .select("id")
+        .single(),
+    );
+
+    if (!update.ok || update.value.error || !isIdRow(update.value.data)) {
+      return {
+        ok: false,
+        error: update.ok ? update.value.error : update.error,
+      };
+    }
+
+    return { ok: true, value: update.value.data.id };
+  }
+
+  const insert = await attemptDatabaseOperation(() =>
+    supabase
+      .from("people")
+      .insert({
+        full_name: input.fullName,
+        email: input.email,
+        phone: input.phone,
+        gender: input.gender,
+      })
+      .select("id")
+      .single(),
+  );
+
+  if (insert.ok && !insert.value.error && isIdRow(insert.value.data)) {
+    return { ok: true, value: insert.value.data.id };
+  }
+
+  // A concurrent request can win the unique email insert. Reload once before failing.
+  const retryLookup = await attemptDatabaseOperation(() =>
+    supabase.from("people").select("id").eq("email", input.email).maybeSingle(),
+  );
+
+  if (
+    retryLookup.ok &&
+    !retryLookup.value.error &&
+    isIdRow(retryLookup.value.data)
+  ) {
+    return { ok: true, value: retryLookup.value.data.id };
+  }
+
+  return {
+    ok: false,
+    error: insert.ok ? insert.value.error : insert.error,
+  };
 }
 
 export async function POST(request: NextRequest) {
@@ -113,8 +197,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid checkout request." }, { status: 400 });
   }
 
-  const { slug, fullName, email } = validation.value;
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  const { slug, fullName, email, phone, age, gender, ticketTypeId } = validation.value;
+  let supabase: SupabaseClient;
 
   try {
     supabase = createSupabaseServerClient();
@@ -126,7 +210,7 @@ export async function POST(request: NextRequest) {
   const eventQuery = await attemptDatabaseOperation(() =>
     supabase
       .from("events")
-      .select("id,slug,title,starts_at,capacity,price_cents,currency,status")
+      .select("id,slug,title,starts_at,capacity,status")
       .eq("slug", slug)
       .maybeSingle(),
   );
@@ -157,6 +241,31 @@ export async function POST(request: NextRequest) {
     return redirectToEvent(request, slug, "unavailable");
   }
 
+  const ticketQuery = await attemptDatabaseOperation(() =>
+    supabase
+      .from("ticket_types")
+      .select("id,event_id,name,audience,price_cents,currency,capacity,status")
+      .eq("id", ticketTypeId)
+      .eq("event_id", event.id)
+      .maybeSingle(),
+  );
+
+  if (!ticketQuery.ok) {
+    logCheckoutFailure("load_ticket", { eventSlug: slug, eventId: event.id }, ticketQuery.error);
+    return redirectToEvent(request, slug, "database");
+  }
+
+  const { data: ticketData, error: ticketError } = ticketQuery.value;
+  const ticket = ticketError ? null : parseCheckoutTicketType(ticketData);
+
+  if (!ticket) {
+    return redirectToEvent(request, slug, ticketError ? "database" : "unavailable");
+  }
+
+  if (!isTicketAvailableForSale(ticket) || !doesTicketMatchGender(ticket, gender)) {
+    return redirectToEvent(request, slug, "unavailable");
+  }
+
   if (event.capacity !== null) {
     const countQuery = await attemptDatabaseOperation(() =>
       supabase
@@ -168,7 +277,7 @@ export async function POST(request: NextRequest) {
 
     if (!countQuery.ok) {
       logCheckoutFailure(
-        "count_capacity",
+        "count_event_capacity",
         { eventSlug: slug, eventId: event.id },
         countQuery.error,
       );
@@ -178,7 +287,7 @@ export async function POST(request: NextRequest) {
     const { count, error: countError } = countQuery.value;
 
     if (countError || count === null) {
-      logCheckoutFailure("count_capacity", { eventSlug: slug, eventId: event.id });
+      logCheckoutFailure("count_event_capacity", { eventSlug: slug, eventId: event.id });
       return redirectToEvent(request, slug, "database");
     }
 
@@ -187,15 +296,56 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  if (ticket.capacity !== null) {
+    const countQuery = await attemptDatabaseOperation(() =>
+      supabase
+        .from("registrations")
+        .select("id", { count: "exact", head: true })
+        .eq("ticket_type_id", ticket.id)
+        .eq("payment_status", "paid"),
+    );
+
+    if (!countQuery.ok) {
+      logCheckoutFailure(
+        "count_ticket_capacity",
+        { eventSlug: slug, eventId: event.id },
+        countQuery.error,
+      );
+      return redirectToEvent(request, slug, "database");
+    }
+
+    const { count, error: countError } = countQuery.value;
+
+    if (countError || count === null) {
+      logCheckoutFailure("count_ticket_capacity", { eventSlug: slug, eventId: event.id });
+      return redirectToEvent(request, slug, "database");
+    }
+
+    if (isSoldOut(ticket.capacity, count)) {
+      return redirectToEvent(request, slug, "sold_out");
+    }
+  }
+
+  const personResult = await resolvePerson(supabase, { fullName, email, phone, gender });
+
+  if (!personResult.ok) {
+    logCheckoutFailure("resolve_person", { eventSlug: slug, eventId: event.id }, personResult.error);
+    return redirectToEvent(request, slug, "database");
+  }
+
   const registrationQuery = await attemptDatabaseOperation(() =>
     supabase
       .from("registrations")
       .insert({
         event_id: event.id,
+        person_id: personResult.value,
+        ticket_type_id: ticket.id,
         full_name: fullName,
         email,
-        amount_cents: event.priceCents,
-        currency: event.currency,
+        age,
+        source: "event_page",
+        amount_cents: ticket.priceCents,
+        currency: ticket.currency,
         payment_status: "pending",
       })
       .select("id")
@@ -213,7 +363,7 @@ export async function POST(request: NextRequest) {
 
   const { data: registrationData, error: registrationError } = registrationQuery.value;
 
-  if (registrationError || !isInsertedRegistration(registrationData)) {
+  if (registrationError || !isIdRow(registrationData)) {
     logCheckoutFailure("insert_registration", { eventSlug: slug, eventId: event.id });
     return redirectToEvent(request, slug, "database");
   }
@@ -225,7 +375,7 @@ export async function POST(request: NextRequest) {
   try {
     const stripe = getStripeServerClient();
     const session = await stripe.checkout.sessions.create(
-      buildCheckoutSessionParams(event, registrationId, email, request.nextUrl.origin),
+      buildCheckoutSessionParams(event, ticket, registrationId, email, request.nextUrl.origin),
       { idempotencyKey: checkoutIdempotencyKey(registrationId) },
     );
 
@@ -265,7 +415,7 @@ export async function POST(request: NextRequest) {
 
   const { data: updatedRegistration, error: updateError } = updateQuery.value;
 
-  if (updateError || !isInsertedRegistration(updatedRegistration)) {
+  if (updateError || !isIdRow(updatedRegistration)) {
     logCheckoutFailure("store_stripe_session", {
       eventSlug: slug,
       eventId: event.id,
