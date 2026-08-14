@@ -1,148 +1,166 @@
 # Marat Events — Phase 0
 
-This is the Vercel-compatible Phase 0 foundation for Marat Events. It contains a server-rendered public event page, test-mode Stripe-hosted Checkout creation, and verified test-mode payment webhooks. It does not send email, process refunds, authenticate users, or provide an admin interface.
+Phase 0 provides a server-rendered event page, Stripe-hosted Checkout in test mode, and a verified Stripe webhook that transitions a registration from `pending` to `paid`. It does not implement email, refunds, authentication, admin UI, invitations, check-in, matching, or analytics.
 
-## Prerequisites
+## Requirements
 
-- Node.js 22 or later and npm.
-- A Supabase project. For a local database, install the [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started) and Docker.
-- `psql` only if you want to run the seed manually against a hosted database.
+- Node.js 22+
+- npm
+- Supabase project
+- Stripe test/sandbox account
+- Stripe CLI for local webhook forwarding
 
-## Install and configure the app
+## Environment
 
-Install dependencies:
-
-```powershell
-npm install
-```
-
-Create a local environment file from the template and add the two server credentials from your Supabase project, a Stripe test secret key, and the test webhook signing secret:
+Copy the template:
 
 ```powershell
 Copy-Item .env.example .env.local
 ```
 
-Required application environment variables:
+Required server-only variables:
 
 ```dotenv
 SUPABASE_URL=
-SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_SECRET_KEY=
 STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
 ```
 
-There are no public environment variables in Phase 0. Do not give any secret a `NEXT_PUBLIC_` prefix, do not commit `.env.local`, and do not place secrets in browser code. In Vercel, add all four values as server-side environment variables for the relevant environment; they must not be configured as public variables.
+`SUPABASE_SECRET_KEY` should be a modern Supabase backend secret key (`sb_secret_...`) from **Settings > API Keys**. It bypasses RLS and must remain server-only. Do not expose it in browser code and never prefix it with `NEXT_PUBLIC_`.
 
-`STRIPE_SECRET_KEY` must be a Stripe test-mode key beginning with `sk_test_`. The server rejects live keys. Local, preview, and staging environments must use Stripe test credentials. A future production live account and its credentials belong to Marat's business.
+`STRIPE_SECRET_KEY` must be a Stripe test-mode key beginning with `sk_test_`. The current server intentionally rejects live Stripe keys.
 
-`STRIPE_WEBHOOK_SECRET` must be the test endpoint signing secret beginning with `whsec_`. A Stripe CLI listener and a Dashboard-managed webhook endpoint have different signing secrets; use the secret for the endpoint that actually sends the request.
+`STRIPE_WEBHOOK_SECRET` must be the `whsec_...` secret for the webhook source that actually sends requests. Stripe CLI forwarding and Dashboard webhook endpoints use different signing secrets.
 
-## Supabase schema and fake seed
+Never commit `.env` or `.env.*` files. `.env.example` contains names only.
 
-The sole migration at `supabase/migrations/20260814000000_initial_events.sql` creates only `public.events` and `public.registrations`. Both have RLS enabled and deliberately have no policies, so public roles have no direct application-table access. The application reads events only through its server-only service-role client.
+## Supabase schema
 
-### Local Supabase
+The migration at:
 
-From the repository root, initialize the Supabase CLI configuration once if it is not already present, start the local stack, and reset it. `db reset` applies all migrations and `supabase/seed.sql`:
-
-```powershell
-supabase init
-supabase start
-supabase db reset
+```text
+supabase/migrations/20260814000000_initial_events.sql
 ```
 
-Use the local API URL and service-role key printed by `supabase status` in `.env.local`. The seed creates only one obviously fake 2099 demo event and has no registrations. It uses `on conflict (slug) do nothing`, so it is safe to run repeatedly.
+creates exactly:
+
+- `public.events`
+- `public.registrations`
+
+Both tables have RLS enabled and intentionally have no public policies in Phase 0. Application database access is performed only through the server-only Supabase secret key.
+
+The development seed at `supabase/seed.sql` creates one fictional published event:
+
+```text
+demo-marats-future-event
+```
 
 ### Hosted Supabase
 
-Log in and link the repository to the intended project, then apply the migration:
+Apply migrations with the Supabase CLI or Dashboard. The migration must be applied before the seed.
 
 ```powershell
 supabase login
-supabase link --project-ref <your-project-ref>
+supabase link --project-ref <project-ref>
 supabase db push
 ```
 
-For the optional fake seed, copy the database connection string from the Supabase dashboard and run this command locally (do not save that connection string in the repository):
+## Run locally
 
 ```powershell
-psql "<hosted-database-connection-string>" -v ON_ERROR_STOP=1 -f supabase/seed.sql
-```
-
-Alternatively, paste the contents of `supabase/seed.sql` into the hosted project's SQL Editor and run it once. The migration must be applied before the seed. Hosted credentials are not included in this repository.
-
-## Run and verify
-
-Start the development server:
-
-```powershell
+npm install
 npm run dev
 ```
 
-Then visit `/events/demo-marats-future-event` after configuring Supabase. `/success` is a neutral static placeholder: it does not inspect URL parameters or a checkout session, and it does not confirm a payment or registration.
+Then open:
 
-## Test-mode Checkout flow
+```text
+http://localhost:3000/events/demo-marats-future-event
+```
 
-1. The server-rendered event page posts `slug`, `full_name`, and `email` to `POST /api/checkout`. HTML validation improves the form experience, but the Route Handler repeats all validation authoritatively.
-2. The server loads the event by slug. Only an event with `status = published` and a future `starts_at` value is available for sale. Ticket amount and currency always come from the event row; client-supplied price fields are ignored.
-3. If capacity is set, the server counts only registrations whose `payment_status` is `paid`. Checkout is refused when that count is at least the event capacity.
-4. The server inserts one `pending` registration using the validated name/email and database amount/currency. It never sets `paid_at`.
-5. The server creates exactly one Stripe Checkout line item in test mode, explicitly allows only the `card` payment method, and attaches `registration_id` and `event_id` as Session metadata. Delayed-notification payment methods are not enabled. The registration-based Stripe idempotency key limits duplicate Session creation if that Session operation is retried.
-6. The server stores `stripe_checkout_session_id` on the still-pending registration, then redirects to Stripe's hosted Checkout URL.
-7. Stripe redirects successful Checkout visits to `/success?session_id={CHECKOUT_SESSION_ID}` and cancellations back to the event page. The success page does not read or trust `session_id`, update the database, or claim payment confirmation.
+Only `published` events are public. Unpublished events return 404. Event times are rendered explicitly in `America/New_York`.
 
-The capacity check is deliberately soft in Phase 0. Counting paid registrations and creating a pending registration are not a transactional seat reservation, so simultaneous buyers can pass the check. Do not treat it as an oversell guarantee.
+## Checkout flow
 
-If Stripe Session creation or the follow-up database update fails, the browser receives a safe error and is not told Checkout succeeded. A pending registration can remain for later diagnosis or cleanup; server logs include the failed operation stage and non-secret identifiers, never secret keys, names, or email addresses.
+1. `/events/[slug]` posts `slug`, `full_name`, and `email` to `POST /api/checkout`.
+2. Server-side validation is authoritative.
+3. The event is loaded from Supabase and must be `published` and in the future.
+4. Price and currency always come from the database, never from client input.
+5. If capacity exists, only `paid` registrations are counted. This is a soft Phase 0 capacity check, not transactional seat reservation.
+6. A `pending` registration is inserted.
+7. Stripe Checkout Session is created in test mode with one card payment and metadata containing `registration_id` and `event_id`.
+8. `stripe_checkout_session_id` is stored on the still-pending registration.
+9. Browser is redirected to Stripe-hosted Checkout.
+10. `/success` is neutral and never proves payment.
 
-## Verified payment webhook
+## Verified Stripe webhook
 
-`POST /api/stripe/webhook` reads the raw request body and `Stripe-Signature` header. It calls the Stripe SDK's signature verifier before inspecting the event or creating a Supabase client. Missing or invalid signatures receive `400` and cannot reach registration mutation logic. Verified unsupported event types receive `200` without database access.
+Endpoint:
 
-Phase 0 processes only verified, test-mode `checkout.session.completed` events whose Checkout Session is complete, uses payment mode, allows only card, and has `payment_status = paid`. An unpaid completed Session is acknowledged without mutation. The success page and its `session_id` query parameter never participate in confirmation.
+```text
+POST /api/stripe/webhook
+```
 
-Before a registration can transition from `pending` to `paid`, all of these values must agree:
+The webhook:
 
-- verified Session metadata contains valid `registration_id` and `event_id` values;
-- the registration exists and its `event_id` matches;
-- `stripe_checkout_session_id` exactly matches the verified Session ID;
-- local `amount_cents` equals Stripe `amount_total`;
-- local currency equals the Stripe Session currency;
-- the local status is `pending` with no existing `paid_at` value.
+- reads the unchanged raw body;
+- verifies `Stripe-Signature` with `STRIPE_WEBHOOK_SECRET` before database access;
+- rejects live-mode events;
+- handles only `checkout.session.completed` in Phase 0;
+- requires `payment_status === "paid"`;
+- cross-checks registration ID, event ID, Checkout Session ID, amount, and currency against Supabase;
+- performs only a conditional `pending -> paid` transition;
+- stores `paid_at` and the PaymentIntent ID when available;
+- treats a matching already-paid registration as a harmless duplicate;
+- never uses the `/success` redirect as proof of payment.
 
-The update repeats those conditions in the database query and changes only `payment_status`, `paid_at`, and, when present, `stripe_payment_intent_id`. It does not change `confirmation_sent_at` or `refunded_at`. If concurrent delivery wins the update, the handler reloads the row and accepts it only when the same verified session/event/amount/currency already produced a consistent paid registration.
+A duplicate delivery must not rewrite `paid_at` or create another registration.
 
-An already-paid matching registration receives `200` without another update, so duplicate delivery does not rewrite `paid_at`. Mismatches and transient database failures receive `500` so Stripe can retry after the local problem is corrected. Logs are limited to Stripe event ID/type, Checkout Session ID, registration ID, processing stage, and generic category. Raw payloads, signatures, secrets, guest identity, and payment details are never logged.
+## Local Stripe webhook test
 
-### Local Stripe CLI verification
-
-Start the application, then run a test-mode Stripe listener in a second terminal:
+Start the app, then in another terminal:
 
 ```powershell
 stripe login
 stripe listen --events checkout.session.completed --forward-to localhost:3000/api/stripe/webhook
 ```
 
-Copy the listener's `whsec_...` value into `STRIPE_WEBHOOK_SECRET` in `.env.local`, then restart the development server. Do not use a Dashboard endpoint secret for CLI-forwarded events.
+Copy the listener's `whsec_...` value into `.env.local` as `STRIPE_WEBHOOK_SECRET`, then restart `npm run dev`.
 
-Manual test plan:
+Manual test sequence:
 
-1. **Valid payment:** create Checkout through the real event form, complete the card payment with Stripe test data, observe a verified webhook, and confirm the registration becomes `paid` with `paid_at` and `stripe_payment_intent_id` populated.
-2. **Duplicate delivery:** note the Stripe event ID and resend the same event to a registered test webhook with `stripe events resend <event_id> --webhook-endpoint=<endpoint_id>` (or use Workbench's retry action). Confirm no extra record is created and the original `paid_at` value is unchanged.
-3. **Invalid signature:** POST without a valid `Stripe-Signature`. Confirm the endpoint returns `400` and the registration is unchanged.
-4. **Browser redirect without webhook:** visit `/success?session_id=anything` manually. Confirm a pending registration stays pending.
-5. **Cancelled Checkout:** cancel on Stripe Checkout and return to the event page. Confirm the registration stays pending.
-6. **Mismatch simulation:** in an isolated test database, alter the expected amount, currency, event ID, or Checkout Session ID before redelivery. Confirm the webhook returns a server error and performs no paid-state mutation; restore the row before normal testing.
+1. Open the demo event page.
+2. Submit name and email.
+3. Complete Stripe Checkout with Stripe test card data.
+4. Confirm the webhook is received.
+5. Confirm the registration becomes `paid` with `paid_at`, Checkout Session ID, and PaymentIntent ID populated.
+6. Redeliver the same Stripe event and confirm `paid_at` does not change.
+7. Visit `/success` manually and confirm it changes nothing.
+8. Cancel a Checkout and confirm the registration remains `pending`.
+9. Send a request without a valid Stripe signature and confirm no database mutation occurs.
 
-Run the local verification commands:
+## Validation
+
+Run:
 
 ```powershell
 npm run lint
 npm run typecheck
-npm test --if-present
+npm test
 npm run build
 ```
 
-The test suite covers authoritative checkout input, sale availability, soft capacity, database-controlled Stripe pricing, signature gating, unsupported/unpaid events, required metadata, every local cross-check, the valid pending-to-paid transition, and duplicate delivery with stable `paid_at`. It does not call Stripe or Supabase.
+GitHub Actions runs the same checks on Ubuntu with Node.js 22.
 
-Before manual testing, apply the migration and seed, configure a disposable Supabase project, and use Stripe test-mode credentials. No real Supabase or Stripe connection is exercised by the automated commands. Vercel server secrets must remain server-only.
+## Security rules
+
+See `AGENTS.md`. In particular:
+
+- no privileged Supabase key in client code;
+- no Stripe secret in client code;
+- no `NEXT_PUBLIC_` secrets;
+- Stripe webhook verification is mandatory;
+- redirects do not confirm payment;
+- duplicate webhook delivery must be safe;
+- test/staging environments never use Stripe live credentials.
