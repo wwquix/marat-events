@@ -11,7 +11,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/checkout-rules.test.ts tests/webhook-payment.test.ts"
+    "test": "tsx --test tests/checkout-rules.test.ts tests/person-resolution.test.ts tests/webhook-payment.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",

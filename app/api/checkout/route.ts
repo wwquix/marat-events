@@ -11,6 +11,10 @@ import {
   parseCheckoutTicketType,
   validateCheckoutInput,
 } from "@/lib/checkout/rules";
+import {
+  resolvePersonIdentity,
+  type PersonRepository,
+} from "@/lib/checkout/person";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getStripeServerClient } from "@/lib/stripe/server";
 
@@ -97,80 +101,52 @@ function isIdRow(value: unknown): value is { id: string } {
   );
 }
 
-async function resolvePerson(
-  supabase: SupabaseClient,
-  input: { fullName: string; email: string; phone: string; gender: "male" | "female" },
-): Promise<OperationResult<string>> {
-  const lookup = await attemptDatabaseOperation(() =>
-    supabase.from("people").select("id").eq("email", input.email).maybeSingle(),
-  );
-
-  if (!lookup.ok) {
-    return lookup;
-  }
-
-  if (lookup.value.error) {
-    return { ok: false, error: lookup.value.error };
-  }
-
-  if (isIdRow(lookup.value.data)) {
-    const existingPersonId = lookup.value.data.id;
-    const update = await attemptDatabaseOperation(() =>
-      supabase
+function createPersonRepository(supabase: SupabaseClient): PersonRepository {
+  return {
+    async loadByEmail(email) {
+      const { data, error } = await supabase
         .from("people")
-        .update({
+        .select("id")
+        .eq("email", email)
+        .maybeSingle();
+
+      if (error) {
+        throw error;
+      }
+
+      if (data === null) {
+        return null;
+      }
+
+      if (!isIdRow(data)) {
+        throw new Error("Person lookup returned invalid data.");
+      }
+
+      return data.id;
+    },
+
+    async create(input) {
+      const { data, error } = await supabase
+        .from("people")
+        .insert({
           full_name: input.fullName,
+          email: input.email,
           phone: input.phone,
           gender: input.gender,
         })
-        .eq("id", existingPersonId)
         .select("id")
-        .single(),
-    );
+        .single();
 
-    if (!update.ok || update.value.error || !isIdRow(update.value.data)) {
-      return {
-        ok: false,
-        error: update.ok ? update.value.error : update.error,
-      };
-    }
+      if (error) {
+        throw error;
+      }
 
-    return { ok: true, value: update.value.data.id };
-  }
+      if (!isIdRow(data)) {
+        throw new Error("Person creation returned invalid data.");
+      }
 
-  const insert = await attemptDatabaseOperation(() =>
-    supabase
-      .from("people")
-      .insert({
-        full_name: input.fullName,
-        email: input.email,
-        phone: input.phone,
-        gender: input.gender,
-      })
-      .select("id")
-      .single(),
-  );
-
-  if (insert.ok && !insert.value.error && isIdRow(insert.value.data)) {
-    return { ok: true, value: insert.value.data.id };
-  }
-
-  // A concurrent request can win the unique email insert. Reload once before failing.
-  const retryLookup = await attemptDatabaseOperation(() =>
-    supabase.from("people").select("id").eq("email", input.email).maybeSingle(),
-  );
-
-  if (
-    retryLookup.ok &&
-    !retryLookup.value.error &&
-    isIdRow(retryLookup.value.data)
-  ) {
-    return { ok: true, value: retryLookup.value.data.id };
-  }
-
-  return {
-    ok: false,
-    error: insert.ok ? insert.value.error : insert.error,
+      return data.id;
+    },
   };
 }
 
@@ -327,10 +303,17 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const personResult = await resolvePerson(supabase, { fullName, email, phone, gender });
+  let personId: string;
 
-  if (!personResult.ok) {
-    logCheckoutFailure("resolve_person", { eventSlug: slug, eventId: event.id }, personResult.error);
+  try {
+    personId = await resolvePersonIdentity(createPersonRepository(supabase), {
+      fullName,
+      email,
+      phone,
+      gender,
+    });
+  } catch (error) {
+    logCheckoutFailure("resolve_person", { eventSlug: slug, eventId: event.id }, error);
     return redirectToEvent(request, slug, "database");
   }
 
@@ -339,11 +322,13 @@ export async function POST(request: NextRequest) {
       .from("registrations")
       .insert({
         event_id: event.id,
-        person_id: personResult.value,
+        person_id: personId,
         ticket_type_id: ticket.id,
         full_name: fullName,
         email,
+        phone,
         age,
+        gender,
         source: "event_page",
         amount_cents: ticket.priceCents,
         currency: ticket.currency,
