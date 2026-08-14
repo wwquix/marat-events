@@ -3,7 +3,7 @@
 /.next
 /out
 
-# Local environment files
+# Environment files
 .env
 .env.*
 !.env.example
@@ -17,3 +17,4 @@ pnpm-debug.log*
 
 # Local Supabase runtime data
 supabase/.temp/
+
