@@ -11,7 +11,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/checkout-rules.test.ts tests/webhook-payment.test.ts"
+    "test": "tsx --test tests/checkout-rules.test.ts tests/person-resolution.test.ts tests/webhook-payment.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
@@ -25,7 +25,7 @@
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.7",
-    "@types/react-dom": "^19.2.3",
+    "@types/react-dom": "^19.2.4",
     "eslint": "^9.39.1",
     "eslint-config-next": "^16.3.1",
     "tailwindcss": "^4.3.3",
