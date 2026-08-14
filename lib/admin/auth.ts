@@ -30,6 +30,8 @@ type SessionPayload = {
   exp: number;
 };
 
+type AdminAuthEnvironment = Readonly<Record<string, string | undefined>>;
+
 export function normalizeAdminEmail(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -94,7 +96,7 @@ export function generateAdminSessionSecret(): string {
 }
 
 export function getAdminAuthConfig(
-  env: NodeJS.ProcessEnv = process.env,
+  env: AdminAuthEnvironment = process.env,
 ): AdminAuthConfig | null {
   const email = typeof env.ADMIN_EMAIL === "string" ? normalizeAdminEmail(env.ADMIN_EMAIL) : "";
   const passwordHash = env.ADMIN_PASSWORD_HASH ?? "";
