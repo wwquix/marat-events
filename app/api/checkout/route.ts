@@ -114,6 +114,7 @@ async function resolvePerson(
   }
 
   if (isIdRow(lookup.value.data)) {
+    const existingPersonId = lookup.value.data.id;
     const update = await attemptDatabaseOperation(() =>
       supabase
         .from("people")
@@ -122,7 +123,7 @@ async function resolvePerson(
           phone: input.phone,
           gender: input.gender,
         })
-        .eq("id", lookup.value.data.id)
+        .eq("id", existingPersonId)
         .select("id")
         .single(),
     );
