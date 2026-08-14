@@ -13,6 +13,7 @@ type EventRow = {
   capacity: number | null;
   price_cents: number;
   currency: string;
+  status: string;
 };
 
 type EventPageProps = {
@@ -20,7 +21,8 @@ type EventPageProps = {
   searchParams: Promise<{ checkout_error?: string | string[] }>;
 };
 
-const EVENT_FIELDS = "slug,title,description,venue,starts_at,capacity,price_cents,currency";
+const EVENT_FIELDS =
+  "slug,title,description,venue,starts_at,capacity,price_cents,currency,status";
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -45,7 +47,8 @@ function isValidEventRow(value: unknown, requestedSlug: string): value is EventR
     startsAtIsValid &&
     (row.capacity === null || isNonNegativeInteger(row.capacity)) &&
     isNonNegativeInteger(row.price_cents) &&
-    currencyIsValid
+    currencyIsValid &&
+    typeof row.status === "string"
   );
 }
 
@@ -61,9 +64,10 @@ function SafeFailure() {
 }
 
 function formatDateTime(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-US", {
     dateStyle: "long",
     timeStyle: "short",
+    timeZone: "America/New_York",
   }).format(new Date(value));
 }
 
@@ -121,6 +125,10 @@ export default async function EventPage({ params, searchParams }: EventPageProps
 
   if (!isValidEventRow(event, slug)) {
     return <SafeFailure />;
+  }
+
+  if (event.status !== "published") {
+    notFound();
   }
 
   return (
