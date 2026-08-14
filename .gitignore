@@ -3,9 +3,10 @@
 /.next
 /out
 
-# Local environment files
-.env.local
-.env.*.local
+# Environment files
+.env
+.env.*
+!.env.example
 
 # Logs and TypeScript build state
 npm-debug.log*

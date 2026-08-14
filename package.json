@@ -2,13 +2,16 @@
   "name": "marat-events-phase-zero",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test \"tests/**/*.test.ts\""
+    "test": "tsx --test tests/checkout-rules.test.ts tests/webhook-payment.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
