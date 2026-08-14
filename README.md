@@ -4,7 +4,7 @@ This is the Vercel-compatible Phase 0 foundation for Marat Events. It contains a
 
 ## Prerequisites
 
-- Node.js 20.9 or later and npm.
+- Node.js 22 or later and npm.
 - A Supabase project. For a local database, install the [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started) and Docker.
 - `psql` only if you want to run the seed manually against a hosted database.
 
