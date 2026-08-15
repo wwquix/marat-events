@@ -43,10 +43,39 @@ export type CommitPreflightResult =
         | "unresolved_review"
         | "invalid_reuse_target"
         | "missing_trusted_identifier"
-        | "duplicate_new_person_identifier"
+        | "conflicting_planned_identifier_ownership"
         | "stale_identity_conflict";
       rowId?: string;
     };
+
+export const AUDIENCE_IMPORT_REVIEW_PAGE_SIZE = 500;
+
+export type AudienceImportPage<T> = {
+  rows: T[];
+  page: number;
+  totalPages: number;
+  startRow: number;
+  endRow: number;
+};
+
+export function paginateAudienceImportRows<T>(
+  rows: T[],
+  requestedPage: string | null | undefined,
+): AudienceImportPage<T> {
+  const totalPages = Math.max(1, Math.ceil(rows.length / AUDIENCE_IMPORT_REVIEW_PAGE_SIZE));
+  const parsedPage = requestedPage && /^\d+$/.test(requestedPage) ? Number(requestedPage) : 1;
+  const page = Number.isSafeInteger(parsedPage) ? Math.min(Math.max(parsedPage, 1), totalPages) : 1;
+  const startIndex = (page - 1) * AUDIENCE_IMPORT_REVIEW_PAGE_SIZE;
+  const pageRows = rows.slice(startIndex, startIndex + AUDIENCE_IMPORT_REVIEW_PAGE_SIZE);
+
+  return {
+    rows: pageRows,
+    page,
+    totalPages,
+    startRow: pageRows.length === 0 ? 0 : startIndex + 1,
+    endRow: startIndex + pageRows.length,
+  };
+}
 
 function isTrustedChannel(value: unknown): value is TrustedContact["channel"] {
   return value === "email" || value === "phone" || value === "instagram" || value === "linkedin";
@@ -132,7 +161,7 @@ export function preflightAudienceImport(
   if (batchStatus === "committed") return { ok: true, idempotent: true };
   if (batchStatus !== "preview") return { ok: false, reason: "batch_not_preview" };
 
-  const newIdentityOwner = new Map<string, string>();
+  const plannedIdentityOwner = new Map<string, string>();
 
   for (const row of rows) {
     const action = effectiveImportAction(row);
@@ -157,17 +186,19 @@ export function preflightAudienceImport(
     for (const contact of contacts) {
       const key = trustedContactKey(contact);
       const owners = currentIdentityOwners.get(key) ?? new Set<string>();
+      const plannedOwner = action === "new_person" ? `new:${row.id}` : `person:${targetPersonId}`;
 
       if (action === "new_person") {
         if (owners.size > 0) return { ok: false, reason: "stale_identity_conflict", rowId: row.id };
-        const firstRowId = newIdentityOwner.get(key);
-        if (firstRowId && firstRowId !== row.id) {
-          return { ok: false, reason: "duplicate_new_person_identifier", rowId: row.id };
-        }
-        newIdentityOwner.set(key, row.id);
       } else if ([...owners].some((ownerId) => ownerId !== targetPersonId)) {
         return { ok: false, reason: "stale_identity_conflict", rowId: row.id };
       }
+
+      const existingPlan = plannedIdentityOwner.get(key);
+      if (existingPlan && existingPlan !== plannedOwner) {
+        return { ok: false, reason: "conflicting_planned_identifier_ownership", rowId: row.id };
+      }
+      plannedIdentityOwner.set(key, plannedOwner);
     }
   }
 

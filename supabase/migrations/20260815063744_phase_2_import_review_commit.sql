@@ -336,39 +336,6 @@ begin
     raise exception using errcode = 'P0001', message = 'unresolved_reviews';
   end if;
 
-  if exists (
-    with effective_new_rows as (
-      select import_row.id, import_row.normalized_data
-      from public.audience_import_rows as import_row
-      left join public.identity_review_queue as review
-        on review.audience_import_row_id = import_row.id
-      where import_row.batch_id = p_batch_id
-        and (
-          import_row.preview_decision = 'new_person'
-          or (import_row.preview_decision = 'review' and review.resolution_action = 'new_person')
-        )
-    ), new_identifiers as (
-      select
-        effective_new_rows.id as row_id,
-        contact ->> 'channel' as channel,
-        contact ->> 'normalizedValue' as normalized_value
-      from effective_new_rows
-      cross join lateral jsonb_array_elements(
-        case
-          when jsonb_typeof(effective_new_rows.normalized_data -> 'contacts') = 'array'
-            then effective_new_rows.normalized_data -> 'contacts'
-          else '[]'::jsonb
-        end
-      ) as contact
-    )
-    select 1
-    from new_identifiers
-    group by channel, normalized_value
-    having count(distinct row_id) > 1
-  ) then
-    raise exception using errcode = 'P0001', message = 'duplicate_new_person_identifier';
-  end if;
-
   for current_row in
     select
       row_data.*,
@@ -470,6 +437,50 @@ begin
       end if;
     end loop;
   end loop;
+
+  if exists (
+    with effective_rows as (
+      select
+        import_row.id,
+        import_row.normalized_data,
+        case
+          when import_row.preview_decision = 'new_person' then 'new_person'
+          when import_row.preview_decision = 'reuse_person' then 'reuse_person'
+          when import_row.preview_decision = 'review' then review.resolution_action
+          else null
+        end as effective_action,
+        case
+          when import_row.preview_decision = 'reuse_person' then import_row.candidate_person_ids[1]
+          when import_row.preview_decision = 'review' and review.resolution_action = 'reuse_person'
+            then review.resolved_person_id
+          else null
+        end as target_person_id
+      from public.audience_import_rows as import_row
+      left join public.identity_review_queue as review
+        on review.audience_import_row_id = import_row.id
+      where import_row.batch_id = p_batch_id
+        and import_row.preview_decision <> 'invalid'
+        and coalesce(review.resolution_action, '') <> 'exclude'
+    ), planned_identifier_owners as (
+      select
+        contact ->> 'channel' as channel,
+        contact ->> 'normalizedValue' as normalized_value,
+        case
+          when effective_rows.effective_action = 'reuse_person'
+            then 'person:' || effective_rows.target_person_id::text
+          else 'new:' || effective_rows.id::text
+        end as planned_owner
+      from effective_rows
+      cross join lateral jsonb_array_elements(effective_rows.normalized_data -> 'contacts') as contact
+      where effective_rows.effective_action in ('new_person', 'reuse_person')
+    )
+    select 1
+    from planned_identifier_owners
+    group by channel, normalized_value
+    having count(distinct planned_owner) > 1
+  ) then
+    raise exception using errcode = 'P0001', message = 'conflicting_planned_identifier_ownership';
+  end if;
 
   for current_row in
     select

@@ -2,8 +2,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { validateAdminId } from "@/lib/admin/events";
+import { MAX_IMPORT_ROWS } from "@/lib/audience/import";
 import {
   canOfferNewPersonResolution,
+  paginateAudienceImportRows,
   summarizeImportRows,
   type ImportCommitRow,
   type ImportPreviewDecision,
@@ -84,6 +86,10 @@ function firstParam(value: string | string[] | undefined): string | null {
   return Array.isArray(value) ? value[0] ?? null : value ?? null;
 }
 
+function pagePath(batchId: string, page: number): string {
+  return page > 1 ? `/admin/audience/import/${batchId}?page=${page}` : `/admin/audience/import/${batchId}`;
+}
+
 function resultMessage(result: string | null): { tone: string; text: string } | null {
   if (result === "resolved") {
     return { tone: "border-emerald-200 bg-emerald-50 text-emerald-900", text: "Review decision saved." };
@@ -112,6 +118,7 @@ function resultMessage(result: string | null): { tone: string; text: string } | 
 export default async function AudienceImportPreviewPage({ params, searchParams }: PreviewPageProps) {
   const batchId = validateAdminId((await params).id);
   if (!batchId) notFound();
+  const resolvedSearchParams = await searchParams;
 
   const supabase = createSupabaseServerClient();
   const [{ data: batch, error: batchError }, { data: rows, error: rowsError }, { data: reviews, error: reviewsError }] =
@@ -130,7 +137,7 @@ export default async function AudienceImportPreviewPage({ params, searchParams }
         )
         .eq("batch_id", batchId)
         .order("row_number", { ascending: true })
-        .limit(5000),
+        .limit(MAX_IMPORT_ROWS),
       supabase
         .from("identity_review_queue")
         .select(
@@ -138,7 +145,7 @@ export default async function AudienceImportPreviewPage({ params, searchParams }
         )
         .eq("import_batch_id", batchId)
         .not("audience_import_row_id", "is", null)
-        .limit(5000),
+        .limit(MAX_IMPORT_ROWS),
     ]);
 
   if (batchError || rowsError || reviewsError) throw new Error("Unable to load audience import preview.");
@@ -163,7 +170,8 @@ export default async function AudienceImportPreviewPage({ params, searchParams }
   });
   const policyRowsById = new Map(policyRows.map((row) => [row.id, row]));
   const summary = summarizeImportRows(policyRows);
-  const visibleRows = allRows.slice(0, 500);
+  const pagination = paginateAudienceImportRows(allRows, firstParam(resolvedSearchParams.page));
+  const visibleRows = pagination.rows;
 
   const personIds = Array.from(
     new Set(
@@ -185,7 +193,7 @@ export default async function AudienceImportPreviewPage({ params, searchParams }
     people = (personRows ?? []) as PersonRow[];
   }
   const peopleById = new Map(people.map((person) => [person.id, person]));
-  const message = resultMessage(firstParam((await searchParams).result));
+  const message = resultMessage(firstParam(resolvedSearchParams.result));
   const canCommit = typedBatch.status === "preview" && summary.unresolvedReview === 0;
   const skipped = summary.invalid + summary.excluded;
 
@@ -268,7 +276,29 @@ export default async function AudienceImportPreviewPage({ params, searchParams }
         </div>
       )}
 
-      <div className="mt-6 overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm">
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-3 text-sm text-stone-600">
+        <p>
+          Rows {pagination.startRow}–{pagination.endRow} of {allRows.length}
+        </p>
+        <nav aria-label="Import rows pages" className="flex flex-wrap items-center gap-1">
+          {Array.from({ length: pagination.totalPages }, (_, index) => index + 1).map((page) => (
+            <Link
+              aria-current={page === pagination.page ? "page" : undefined}
+              className={`rounded-md border px-2.5 py-1.5 font-medium ${
+                page === pagination.page
+                  ? "border-stone-900 bg-stone-900 text-white"
+                  : "border-stone-200 bg-white text-stone-700 hover:bg-stone-50"
+              }`}
+              href={pagePath(typedBatch.id, page)}
+              key={page}
+            >
+              {page}
+            </Link>
+          ))}
+        </nav>
+      </div>
+
+      <div className="mt-3 overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-stone-200 text-sm">
             <thead className="bg-stone-50 text-left text-xs font-semibold uppercase tracking-wide text-stone-500">
@@ -347,6 +377,7 @@ export default async function AudienceImportPreviewPage({ params, searchParams }
                             <form action={resolveAudienceImportReviewAction} key={person.id}>
                               <input name="batch_id" type="hidden" value={typedBatch.id} />
                               <input name="row_id" type="hidden" value={row.id} />
+                              <input name="return_page" type="hidden" value={pagination.page} />
                               <input name="resolution_action" type="hidden" value="reuse_person" />
                               <input name="person_id" type="hidden" value={person.id} />
                               <button
@@ -361,6 +392,7 @@ export default async function AudienceImportPreviewPage({ params, searchParams }
                             <form action={resolveAudienceImportReviewAction}>
                               <input name="batch_id" type="hidden" value={typedBatch.id} />
                               <input name="row_id" type="hidden" value={row.id} />
+                              <input name="return_page" type="hidden" value={pagination.page} />
                               <input name="resolution_action" type="hidden" value="new_person" />
                               <button
                                 className="w-full rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-left font-medium text-emerald-800 hover:bg-emerald-100"
@@ -377,6 +409,7 @@ export default async function AudienceImportPreviewPage({ params, searchParams }
                           <form action={resolveAudienceImportReviewAction}>
                             <input name="batch_id" type="hidden" value={typedBatch.id} />
                             <input name="row_id" type="hidden" value={row.id} />
+                            <input name="return_page" type="hidden" value={pagination.page} />
                             <input name="resolution_action" type="hidden" value="exclude" />
                             <button
                               className="w-full rounded-md border border-stone-300 bg-white px-2 py-1.5 text-left font-medium text-stone-700 hover:bg-stone-50"
@@ -407,9 +440,9 @@ export default async function AudienceImportPreviewPage({ params, searchParams }
         </div>
       </div>
 
-      {allRows.length > visibleRows.length ? (
-        <p className="mt-3 text-xs text-amber-700">
-          Preview table shows the first {visibleRows.length} rows; the commit summary includes the entire import.
+      {pagination.totalPages > 1 ? (
+        <p className="mt-3 text-xs text-stone-500">
+          Use the numbered pages to review every row. Commit counts always include the entire import.
         </p>
       ) : null}
     </section>

@@ -5,6 +5,7 @@ import test from "node:test";
 
 import {
   canOfferNewPersonResolution,
+  paginateAudienceImportRows,
   preflightAudienceImport,
   summarizeImportRows,
   trustedContactKey,
@@ -102,8 +103,51 @@ test("duplicate trusted identifiers cannot create two new people", () => {
   const rows = [row("first", { email: "same@example.com" }), row("second", { email: "same@example.com" })];
   assert.deepEqual(preflightAudienceImport("preview", rows, new Map()), {
     ok: false,
-    reason: "duplicate_new_person_identifier",
+    reason: "conflicting_planned_identifier_ownership",
     rowId: "second",
+  });
+});
+
+test("one batch identifier cannot be planned for two different reused people", () => {
+  const shared = "shared@example.com";
+  const rows = [
+    row("first", {
+      previewDecision: "review",
+      email: shared,
+      candidates: [PERSON_ONE, PERSON_TWO],
+      resolution: "reuse_person",
+      resolvedPersonId: PERSON_ONE,
+    }),
+    row("second", {
+      previewDecision: "review",
+      email: shared,
+      candidates: [PERSON_ONE, PERSON_TWO],
+      resolution: "reuse_person",
+      resolvedPersonId: PERSON_TWO,
+    }),
+  ];
+
+  assert.deepEqual(preflightAudienceImport("preview", rows, new Map()), {
+    ok: false,
+    reason: "conflicting_planned_identifier_ownership",
+    rowId: "second",
+  });
+});
+
+test("duplicate rows may idempotently attach one identifier to the same reused person", () => {
+  const rows = ["first", "second"].map((id) =>
+    row(id, {
+      previewDecision: "review",
+      email: "shared@example.com",
+      candidates: [PERSON_ONE, PERSON_TWO],
+      resolution: "reuse_person",
+      resolvedPersonId: PERSON_ONE,
+    }),
+  );
+
+  assert.deepEqual(preflightAudienceImport("preview", rows, new Map()), {
+    ok: true,
+    idempotent: false,
   });
 });
 
@@ -159,6 +203,21 @@ test("committed batches are idempotent and keep committed counts", () => {
   assert.equal(summarizeImportRows([committed]).newPeople, 1);
 });
 
+test("a review row beyond index 500 is reachable and offers its resolution controls", () => {
+  const rows = Array.from({ length: 551 }, (_, index) =>
+    row(`row-${index + 1}`, {
+      previewDecision: index === 550 ? "review" : "invalid",
+    }),
+  );
+  const page = paginateAudienceImportRows(rows, "2");
+
+  assert.equal(page.page, 2);
+  assert.equal(page.startRow, 501);
+  assert.equal(page.endRow, 551);
+  assert.equal(page.rows.at(-1)?.id, "row-551");
+  assert.equal(canOfferNewPersonResolution(page.rows.at(-1)!, rows), true);
+});
+
 test("SQL transaction keeps identity and consent invariants explicit", () => {
   const migrationName = readdirSync(path.join(process.cwd(), "supabase", "migrations")).find((name) =>
     name.endsWith("_phase_2_import_review_commit.sql"),
@@ -171,6 +230,9 @@ test("SQL transaction keeps identity and consent invariants explicit", () => {
   assert.match(sql, /status = 'committed'/i);
   assert.match(sql, /stale_new_person_conflict/i);
   assert.match(sql, /stale_reuse_conflict/i);
+  assert.match(sql, /planned_identifier_owners/i);
+  assert.match(sql, /count\(distinct planned_owner\) > 1/i);
+  assert.match(sql, /conflicting_planned_identifier_ownership/i);
   assert.match(sql, /consent_status[\s\S]*'unknown'/i);
   assert.match(sql, /contactability_status[\s\S]*'unknown'/i);
   assert.doesNotMatch(sql, /update\s+public\.people\s+set/i);
@@ -179,6 +241,22 @@ test("SQL transaction keeps identity and consent invariants explicit", () => {
   assert.match(sql, /revoke execute on function public\.commit_audience_import[\s\S]*from anon/i);
   assert.match(sql, /grant execute on function public\.commit_audience_import[\s\S]*to service_role/i);
   assert.doesNotMatch(sql, /\bcommit\s*;/i);
+});
+
+test("paginated review forms preserve the selected page after a resolution", () => {
+  const page = readFileSync(
+    path.join(process.cwd(), "app", "admin", "(protected)", "audience", "import", "[id]", "page.tsx"),
+    "utf8",
+  );
+  const actions = readFileSync(
+    path.join(process.cwd(), "app", "admin", "(protected)", "audience", "import", "actions.ts"),
+    "utf8",
+  );
+
+  assert.match(page, /name="return_page"/);
+  assert.match(page, /paginateAudienceImportRows/);
+  assert.match(actions, /readReturnPage\(formData\)/);
+  assert.match(actions, /batchPath\(batchId, error \? "resolution_blocked" : "resolved", returnPage\)/);
 });
 
 test("every audience import mutation rechecks the admin session", () => {

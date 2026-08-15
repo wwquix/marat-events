@@ -6,9 +6,11 @@ import {
   classifyAudienceRows,
   csvRecords,
   identityKey,
+  MAX_IMPORT_ROWS,
   type ContactChannel,
   type ExistingIdentityIndex,
 } from "@/lib/audience/import";
+import { AUDIENCE_IMPORT_REVIEW_PAGE_SIZE } from "@/lib/audience/commit";
 import { validateAdminId } from "@/lib/admin/events";
 import { requireAdminSession } from "@/lib/admin/session";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
@@ -31,10 +33,20 @@ function importHomePath(error?: string): string {
   return error ? `/admin/audience/import?error=${encodeURIComponent(error)}` : "/admin/audience/import";
 }
 
-function batchPath(batchId: string, result?: string): string {
-  return result
-    ? `/admin/audience/import/${batchId}?result=${encodeURIComponent(result)}`
-    : `/admin/audience/import/${batchId}`;
+function batchPath(batchId: string, result?: string, page?: number): string {
+  const query = new URLSearchParams();
+  if (result) query.set("result", result);
+  if (page && page > 1) query.set("page", String(page));
+  const suffix = query.toString();
+  return `/admin/audience/import/${batchId}${suffix ? `?${suffix}` : ""}`;
+}
+
+function readReturnPage(formData: FormData): number {
+  const value = formData.get("return_page");
+  if (typeof value !== "string" || !/^\d+$/.test(value)) return 1;
+  const page = Number(value);
+  const maxPage = Math.ceil(MAX_IMPORT_ROWS / AUDIENCE_IMPORT_REVIEW_PAGE_SIZE);
+  return Number.isSafeInteger(page) && page >= 1 && page <= maxPage ? page : 1;
 }
 
 function readShortText(formData: FormData, key: string, maxLength: number): string | null {
@@ -228,6 +240,7 @@ export async function resolveAudienceImportReviewAction(formData: FormData) {
   const session = await requireAdminSession();
   const batchId = validateAdminId(formData.get("batch_id"));
   const rowId = validateAdminId(formData.get("row_id"));
+  const returnPage = readReturnPage(formData);
   const action = formData.get("resolution_action");
   const rawPersonId = formData.get("person_id");
   const note = formData.has("resolution_note") ? readOptionalText(formData, "resolution_note", 500) : null;
@@ -238,12 +251,12 @@ export async function resolveAudienceImportReviewAction(formData: FormData) {
     (action !== "reuse_person" && action !== "new_person" && action !== "exclude") ||
     note === undefined
   ) {
-    redirect(batchId ? batchPath(batchId, "invalid_resolution") : importHomePath("invalid"));
+    redirect(batchId ? batchPath(batchId, "invalid_resolution", returnPage) : importHomePath("invalid"));
   }
 
   const personId = action === "reuse_person" ? validateAdminId(rawPersonId) : null;
   if (action === "reuse_person" && !personId) {
-    redirect(batchPath(batchId, "invalid_resolution"));
+    redirect(batchPath(batchId, "invalid_resolution", returnPage));
   }
 
   const { error } = await createSupabaseServerClient().rpc("resolve_audience_import_review", {
@@ -254,7 +267,7 @@ export async function resolveAudienceImportReviewAction(formData: FormData) {
     p_note: note,
   });
 
-  redirect(batchPath(batchId, error ? "resolution_blocked" : "resolved"));
+  redirect(batchPath(batchId, error ? "resolution_blocked" : "resolved", returnPage));
 }
 
 export async function commitAudienceImportAction(formData: FormData) {
