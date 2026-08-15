@@ -50,7 +50,8 @@ export function parseAttendeeFilters(
     genderValue === "male" || genderValue === "female" ? genderValue : "all";
 
   const ticketId = ticketValue && UUID_PATTERN.test(ticketValue) ? ticketValue : null;
-  const source = sourceValue && SOURCE_PATTERN.test(sourceValue) ? sourceValue : null;
+  const source =
+    sourceValue && sourceValue !== "all" && SOURCE_PATTERN.test(sourceValue) ? sourceValue : null;
 
   return {
     payment,
