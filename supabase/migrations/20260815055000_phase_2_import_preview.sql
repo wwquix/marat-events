@@ -1,3 +1,8 @@
+update public.person_contacts
+set normalized_value = regexp_replace(value, '[^0-9]', '', 'g'),
+    updated_at = now()
+where channel in ('phone', 'sms');
+
 create table public.audience_import_rows (
   id uuid primary key default gen_random_uuid(),
   batch_id uuid not null references public.audience_import_batches(id) on delete cascade,
