@@ -107,7 +107,7 @@ Gate to Phase 2: **passed**. Marat can create an event, configure tickets, recei
 
 Goal: load the existing ~600-person audience and manage invitations safely.
 
-### 2.1 Audience schema — IN PROGRESS
+### 2.1 Audience schema — COMPLETE
 - person profile/source metadata needed for event operations;
 - optional primary email so social-only audience records are valid people;
 - contact channels separate from registration snapshots;
@@ -117,14 +117,15 @@ Goal: load the existing ~600-person audience and manage invitations safely.
 - identity-conflict / human-review state;
 - RLS with no public policies for new audience tables.
 
-### 2.2 Import pipeline — NEXT
-- CSV/Sheets-friendly import format;
-- validation preview before commit;
-- normalized email/phone handling;
-- deterministic dedupe on trusted identifiers;
-- never auto-merge by name alone;
-- explicit conflict report for human review;
-- repeatable/idempotent imports.
+### 2.2 Import pipeline — IN PROGRESS
+- CSV/Sheets-friendly import format — complete;
+- validation preview before commit — complete and staging-verified;
+- normalized email/phone/Instagram/LinkedIn handling — complete;
+- deterministic dedupe on trusted identifiers, never by name alone — complete for preview and commit;
+- explicit review resolution to reuse, create or exclude — complete;
+- atomic, retry-safe PostgreSQL commit with current-state identity revalidation — complete;
+- staging E2E verification of review resolution and commit — pending after migration deployment;
+- operational validation with the full real-audience import remains pending.
 
 ### 2.3 Segmentation and invite targeting
 - event audience/segment selection;
