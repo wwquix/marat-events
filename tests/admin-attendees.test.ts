@@ -27,6 +27,23 @@ test("parses supported attendee filters", () => {
   });
 });
 
+test("treats All sources sentinel as no source filter", () => {
+  const filters = parseAttendeeFilters({
+    payment: "pending",
+    gender: "all",
+    ticket: "all",
+    source: "all",
+  });
+
+  assert.deepEqual(filters, {
+    payment: "pending",
+    gender: "all",
+    ticketId: null,
+    source: null,
+    query: "",
+  });
+});
+
 test("fails closed to neutral filters for invalid query parameters", () => {
   const filters = parseAttendeeFilters({
     payment: "chargeback",
