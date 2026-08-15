@@ -11,7 +11,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/admin-attendees.test.ts tests/admin-auth.test.ts tests/admin-events.test.ts tests/checkout-rules.test.ts tests/person-resolution.test.ts tests/webhook-payment.test.ts",
+    "test": "tsx --test tests/admin-attendees.test.ts tests/admin-auth.test.ts tests/admin-csv.test.ts tests/admin-events.test.ts tests/checkout-rules.test.ts tests/person-resolution.test.ts tests/webhook-payment.test.ts",
     "admin:credentials": "tsx scripts/create-admin-credentials.ts"
   },
   "dependencies": {
