@@ -48,12 +48,20 @@ export default async function AdminHomePage() {
             Create events, configure tickets, publish registration pages and stop sales without editing the database.
           </p>
         </div>
-        <Link
-          className="rounded-lg bg-stone-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-stone-800"
-          href="/admin/events/new"
-        >
-          Create event
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            className="rounded-lg border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-stone-700 hover:bg-stone-50"
+            href="/admin/audience/import"
+          >
+            Import audience
+          </Link>
+          <Link
+            className="rounded-lg bg-stone-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-stone-800"
+            href="/admin/events/new"
+          >
+            Create event
+          </Link>
+        </div>
       </div>
 
       <div className="mt-8 overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm">
