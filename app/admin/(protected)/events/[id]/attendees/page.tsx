@@ -170,6 +170,14 @@ export default async function AttendeesPage({ params, searchParams }: AttendeesP
     ),
   ).sort();
 
+  const exportParams = new URLSearchParams();
+  if (filters.query) exportParams.set("q", filters.query);
+  if (filters.payment !== "all") exportParams.set("payment", filters.payment);
+  if (filters.gender !== "all") exportParams.set("gender", filters.gender);
+  if (filters.ticketId) exportParams.set("ticket", filters.ticketId);
+  if (filters.source) exportParams.set("source", filters.source);
+  const exportSuffix = exportParams.size > 0 ? `?${exportParams.toString()}` : "";
+
   return (
     <section>
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -182,14 +190,22 @@ export default async function AttendeesPage({ params, searchParams }: AttendeesP
             {formatAdminDateTime(typedEvent.starts_at)} · {visibleRegistrations.length} shown
           </p>
         </div>
-        <a
-          className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50"
-          href={`/events/${typedEvent.slug}`}
-          rel="noreferrer"
-          target="_blank"
-        >
-          Public page
-        </a>
+        <div className="flex flex-wrap gap-2">
+          <a
+            className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50"
+            href={`/admin/events/${eventId}/attendees/export${exportSuffix}`}
+          >
+            Export CSV
+          </a>
+          <a
+            className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50"
+            href={`/events/${typedEvent.slug}`}
+            rel="noreferrer"
+            target="_blank"
+          >
+            Public page
+          </a>
+        </div>
       </div>
 
       <form className="mt-7 grid gap-3 rounded-xl border border-stone-200 bg-white p-4 shadow-sm md:grid-cols-5" method="get">
