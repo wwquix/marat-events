@@ -38,7 +38,7 @@ Gate: complete.
 
 ---
 
-## Phase 1 — Registration core + basic admin — IN PROGRESS
+## Phase 1 — Registration core + basic admin — COMPLETE
 
 Goal: turn the payment demo into a usable event-registration system for Marat.
 
@@ -52,60 +52,72 @@ Goal: turn the payment demo into a usable event-registration system for Marat.
 - real staging E2E payment;
 - negative gender test confirmed before Stripe with zero DB mutation.
 
-### 1.2 Identity/data-integrity hardening — NEXT
-- normalize email consistently for lookup/storage;
-- reuse a known person without allowing an unauthenticated public form to overwrite trusted central identity fields;
-- preserve registration-time snapshots separately from central identity where needed;
-- handle concurrent duplicate-email creation safely;
-- add tests for casing, duplicate email, concurrency and malicious overwrite attempts.
+### 1.2 Identity/data-integrity hardening — COMPLETE
+- normalized email lookup/storage;
+- existing people reused without unauthenticated overwrite of trusted central identity fields;
+- registration-time name/email/phone/gender/age snapshots preserved separately;
+- concurrent duplicate-email creation handled safely;
+- casing, duplicate identity, concurrency and overwrite-attempt tests added;
+- staging E2E verified central-person fingerprint remains unchanged during overwrite attempt.
 
-### 1.3 Admin authentication
+### 1.3 Admin authentication — COMPLETE
 - private admin sign-in;
 - protected `/admin` routes and server actions;
-- least-privilege authorization model suitable for Marat/operations.
+- scrypt password hash;
+- signed bounded HttpOnly session cookie;
+- login/logout staging E2E completed.
 
-### 1.4 Event and ticket administration
+### 1.4 Event and ticket administration — COMPLETE
 - create/edit/publish/hide events;
 - create/edit/hide/sell-out ticket types;
 - configure gender/audience, price, currency, capacity and event metadata;
-- prevent invalid destructive edits after paid registrations exist.
+- prevent invalid destructive edits after paid registrations exist;
+- staging admin-created event with Men/Women tickets verified publicly.
 
-### 1.5 Attendee administration
+### 1.5 Attendee administration — COMPLETE
 - event attendee list;
 - paid/pending status;
 - person and registration details;
 - ticket/gender/source filters;
-- search by safe operational fields;
-- no client exposure of privileged keys.
+- search by operational identity fields;
+- central person vs registration snapshot visibility;
+- filter regression fixed and staging-verified.
 
-### 1.6 CSV export
-- export event attendee data for operational use;
-- deterministic columns and timestamps;
-- server-generated export from SQL source of truth.
+### 1.6 CSV export — COMPLETE
+- protected server-generated attendee export;
+- deterministic columns and UTC timestamps;
+- current attendee filters/search preserved in export;
+- export pagination beyond the UI display cap;
+- UTF-8 BOM and CSV formula-injection neutralization;
+- staging verified with 8 total and 5 paid rows.
 
-### 1.7 Phase 1 hardening and E2E gate
-- admin authorization negative tests;
-- event/ticket CRUD tests;
+### 1.7 Phase 1 hardening and E2E gate — COMPLETE
+- admin authorization tests;
+- event/ticket mutation policy tests;
 - attendee/CSV tests;
-- no regression in Phase 0 webhook security;
-- staging E2E from admin-created event -> public registration -> Stripe test payment -> attendee list/export.
+- Phase 0 verified webhook invariants re-audited;
+- secrets scan and RLS/no-public-policy audit;
+- staging E2E completed from admin-created event -> public registration -> Stripe test payment -> verified webhook -> paid attendee record.
 
-Gate to Phase 2: Marat can create an event, configure tickets, receive a real test registration/payment, and see/export the attendee from the admin UI without editing the database manually.
+Gate to Phase 2: **passed**. Marat can create an event, configure tickets, receive a real test registration/payment, and see/export the attendee from the admin UI without editing the database manually.
 
 ---
 
-## Phase 2 — Audience database, import and invitations
+## Phase 2 — Audience database, import and invitations — IN PROGRESS
 
 Goal: load the existing ~600-person audience and manage invitations safely.
 
-### 2.1 Audience schema
+### 2.1 Audience schema — IN PROGRESS
 - person profile/source metadata needed for event operations;
+- optional primary email so social-only audience records are valid people;
+- contact channels separate from registration snapshots;
 - consent/contactability fields per channel;
-- opt-out/suppression state;
+- person-level suppression state;
 - import provenance and timestamps;
-- identity-conflict / human-review state.
+- identity-conflict / human-review state;
+- RLS with no public policies for new audience tables.
 
-### 2.2 Import pipeline
+### 2.2 Import pipeline — NEXT
 - CSV/Sheets-friendly import format;
 - validation preview before commit;
 - normalized email/phone handling;
