@@ -6,6 +6,12 @@ import {
   formatAdminDateTime,
   parseAttendeeFilters,
 } from "@/lib/admin/attendees";
+import {
+  AttendeeLoadError,
+  loadCompleteAttendeeRows,
+  paginateAttendeeRows,
+  parseAttendeePage,
+} from "@/lib/admin/attendee-pagination";
 import { validateAdminId } from "@/lib/admin/events";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -82,6 +88,11 @@ type RegistrationRow = {
   ticket_types: TicketRelation | TicketRelation[] | null;
 };
 
+type SourceRow = {
+  id: string;
+  source: string | null;
+};
+
 function firstRelation<T>(value: T | T[] | null): T | null {
   return Array.isArray(value) ? (value[0] ?? null) : value;
 }
@@ -93,11 +104,29 @@ function statusClass(status: string): string {
   return "bg-stone-100 text-stone-700 ring-stone-200";
 }
 
+function attendeeListPath(
+  eventId: string,
+  filters: ReturnType<typeof parseAttendeeFilters>,
+  page: number,
+): string {
+  const params = new URLSearchParams();
+  if (filters.query) params.set("q", filters.query);
+  if (filters.payment !== "all") params.set("payment", filters.payment);
+  if (filters.gender !== "all") params.set("gender", filters.gender);
+  if (filters.ticketId) params.set("ticket", filters.ticketId);
+  if (filters.source) params.set("source", filters.source);
+  if (page > 1) params.set("page", String(page));
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  return `/admin/events/${eventId}/attendees${suffix}`;
+}
+
 export default async function AttendeesPage({ params, searchParams }: AttendeesPageProps) {
   const eventId = validateAdminId((await params).id);
   if (!eventId) notFound();
 
-  const filters = parseAttendeeFilters(await searchParams);
+  const resolvedSearchParams = await searchParams;
+  const filters = parseAttendeeFilters(resolvedSearchParams);
+  const requestedPage = parseAttendeePage(resolvedSearchParams.page);
   const supabase = createSupabaseServerClient();
 
   const [{ data: event, error: eventError }, { data: tickets, error: ticketError }] =
@@ -117,38 +146,68 @@ export default async function AttendeesPage({ params, searchParams }: AttendeesP
   if (eventError || ticketError) throw new Error("Unable to load attendee administration data.");
   if (!event) notFound();
 
-  let registrationQuery = supabase
-    .from("registrations")
-    .select(REGISTRATION_FIELDS)
-    .eq("event_id", eventId)
-    .order("created_at", { ascending: false })
-    .limit(500);
+  let typedRegistrations: RegistrationRow[];
+  let sourceRows: SourceRow[];
+  try {
+    [typedRegistrations, sourceRows] = await Promise.all([
+      loadCompleteAttendeeRows<RegistrationRow>(
+        async (fromInclusive, toInclusive) => {
+          let query = supabase
+            .from("registrations")
+            .select(REGISTRATION_FIELDS, { count: "exact" })
+            .eq("event_id", eventId)
+            .order("created_at", { ascending: false })
+            .order("id", { ascending: true });
 
-  if (filters.payment !== "all") {
-    registrationQuery = registrationQuery.eq("payment_status", filters.payment);
-  }
-  if (filters.gender !== "all") {
-    registrationQuery = registrationQuery.eq("gender", filters.gender);
-  }
-  if (filters.ticketId) {
-    registrationQuery = registrationQuery.eq("ticket_type_id", filters.ticketId);
-  }
-  if (filters.source) {
-    registrationQuery = registrationQuery.eq("source", filters.source);
-  }
+          if (filters.payment !== "all") {
+            query = query.eq("payment_status", filters.payment);
+          }
+          if (filters.gender !== "all") {
+            query = query.eq("gender", filters.gender);
+          }
+          if (filters.ticketId) {
+            query = query.eq("ticket_type_id", filters.ticketId);
+          }
+          if (filters.source) {
+            query = query.eq("source", filters.source);
+          }
 
-  const [{ data: registrations, error: registrationError }, { data: sourceRows, error: sourceError }] =
-    await Promise.all([
-      registrationQuery,
-      supabase.from("registrations").select("source").eq("event_id", eventId).limit(500),
+          const response = await query.range(fromInclusive, toInclusive);
+          return {
+            data: response.data as unknown as RegistrationRow[] | null,
+            count: response.count,
+            error: response.error,
+          };
+        },
+        (row) => row.id,
+      ),
+      loadCompleteAttendeeRows<SourceRow>(
+        async (fromInclusive, toInclusive) => {
+          const response = await supabase
+            .from("registrations")
+            .select("id,source", { count: "exact" })
+            .eq("event_id", eventId)
+            .order("id", { ascending: true })
+            .range(fromInclusive, toInclusive);
+          return {
+            data: response.data as SourceRow[] | null,
+            count: response.count,
+            error: response.error,
+          };
+        },
+        (row) => row.id,
+      ),
     ]);
-
-  if (registrationError || sourceError) throw new Error("Unable to load registrations.");
+  } catch (error) {
+    if (error instanceof AttendeeLoadError && error.code === "limit_exceeded") {
+      throw new Error("This event exceeds the 5,000-registration administration limit.");
+    }
+    throw new Error("Unable to load complete registration data.");
+  }
 
   const typedEvent = event as EventRow;
   const typedTickets = (tickets ?? []) as TicketOption[];
-  const typedRegistrations = (registrations ?? []) as unknown as RegistrationRow[];
-  const visibleRegistrations = typedRegistrations.filter((row) => {
+  const matchingRegistrations = typedRegistrations.filter((row) => {
     const person = firstRelation(row.people);
     return attendeeMatchesSearch(
       {
@@ -162,9 +221,10 @@ export default async function AttendeesPage({ params, searchParams }: AttendeesP
       filters.query,
     );
   });
+  const attendeePage = paginateAttendeeRows(matchingRegistrations, requestedPage);
   const sources = Array.from(
     new Set(
-      (sourceRows ?? [])
+      sourceRows
         .map((row) => (typeof row.source === "string" ? row.source : null))
         .filter((value): value is string => Boolean(value)),
     ),
@@ -187,7 +247,7 @@ export default async function AttendeesPage({ params, searchParams }: AttendeesP
           </Link>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-stone-900">Attendees</h1>
           <p className="mt-2 text-sm text-stone-600">
-            {formatAdminDateTime(typedEvent.starts_at)} · {visibleRegistrations.length} shown
+            {formatAdminDateTime(typedEvent.starts_at)} · {attendeePage.firstRow}–{attendeePage.lastRow} of {attendeePage.totalRows} matching
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -257,7 +317,7 @@ export default async function AttendeesPage({ params, searchParams }: AttendeesP
       </form>
 
       <div className="mt-6 overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm">
-        {visibleRegistrations.length === 0 ? (
+        {attendeePage.rows.length === 0 ? (
           <div className="p-8 text-center text-sm text-stone-500">No registrations match these filters.</div>
         ) : (
           <div className="overflow-x-auto">
@@ -273,7 +333,7 @@ export default async function AttendeesPage({ params, searchParams }: AttendeesP
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-100">
-                {visibleRegistrations.map((row) => {
+                {attendeePage.rows.map((row) => {
                   const ticket = firstRelation(row.ticket_types);
                   return (
                     <tr className="hover:bg-stone-50" key={row.id}>
@@ -303,8 +363,30 @@ export default async function AttendeesPage({ params, searchParams }: AttendeesP
         )}
       </div>
 
-      {typedRegistrations.length >= 500 ? (
-        <p className="mt-3 text-xs text-amber-700">Showing at most 500 registrations. Pagination will be added before production launch.</p>
+      {attendeePage.totalPages > 1 ? (
+        <nav aria-label="Attendee pages" className="mt-6 flex items-center justify-between text-sm">
+          {attendeePage.page > 1 ? (
+            <Link
+              className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-stone-700"
+              href={attendeeListPath(eventId, filters, attendeePage.page - 1)}
+            >
+              Previous
+            </Link>
+          ) : (
+            <span />
+          )}
+          <span className="text-stone-600">Page {attendeePage.page} of {attendeePage.totalPages}</span>
+          {attendeePage.page < attendeePage.totalPages ? (
+            <Link
+              className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-stone-700"
+              href={attendeeListPath(eventId, filters, attendeePage.page + 1)}
+            >
+              Next
+            </Link>
+          ) : (
+            <span />
+          )}
+        </nav>
       ) : null}
     </section>
   );

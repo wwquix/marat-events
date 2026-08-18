@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { attendeeMatchesSearch, parseAttendeeFilters } from "@/lib/admin/attendees";
+import {
+  AttendeeLoadError,
+  loadCompleteAttendeeRows,
+  validateAttendeeTotal,
+} from "@/lib/admin/attendee-pagination";
 import { buildCsv, csvDownloadFilename, type CsvCell } from "@/lib/admin/csv";
 import { validateAdminId } from "@/lib/admin/events";
 import { getAdminSession } from "@/lib/admin/session";
@@ -8,7 +13,6 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
-const PAGE_SIZE = 1000;
 const REGISTRATION_FIELDS = [
   "id",
   "person_id",
@@ -127,6 +131,23 @@ function toCsvRow(row: RegistrationRow): CsvCell[] {
   ];
 }
 
+function exportFailure(error: unknown): NextResponse {
+  const limitExceeded = error instanceof AttendeeLoadError && error.code === "limit_exceeded";
+  return new NextResponse(
+    limitExceeded
+      ? "Attendee export is limited to events with at most 5,000 registrations."
+      : "Unable to export complete attendee data.",
+    {
+      status: limitExceeded ? 422 : 500,
+      headers: {
+        "Cache-Control": "private, no-store",
+        "Content-Type": "text/plain; charset=utf-8",
+        "X-Content-Type-Options": "nosniff",
+      },
+    },
+  );
+}
+
 export async function GET(request: NextRequest, context: ExportRouteContext) {
   const session = await getAdminSession();
   if (!session) {
@@ -140,70 +161,74 @@ export async function GET(request: NextRequest, context: ExportRouteContext) {
 
   const filters = parseAttendeeFilters(searchParamsRecord(request.nextUrl.searchParams));
   const supabase = createSupabaseServerClient();
-  const { data: event, error: eventError } = await supabase
-    .from("events")
-    .select("id,slug")
-    .eq("id", eventId)
-    .maybeSingle();
+  const [eventResponse, totalResponse] = await Promise.all([
+    supabase.from("events").select("id,slug").eq("id", eventId).maybeSingle(),
+    supabase
+      .from("registrations")
+      .select("id", { count: "exact", head: true })
+      .eq("event_id", eventId),
+  ]);
+  const { data: event, error: eventError } = eventResponse;
 
-  if (eventError) {
-    return new NextResponse("Unable to export attendees.", { status: 500 });
+  if (eventError || totalResponse.error) {
+    return exportFailure(new AttendeeLoadError("query_failed"));
   }
   if (!event || typeof event.slug !== "string") {
     return new NextResponse("Not found", { status: 404 });
   }
 
-  const matchingRows: RegistrationRow[] = [];
-  let offset = 0;
+  let rows: RegistrationRow[];
+  try {
+    validateAttendeeTotal(totalResponse.count);
+    rows = await loadCompleteAttendeeRows<RegistrationRow>(
+      async (fromInclusive, toInclusive) => {
+        let query = supabase
+          .from("registrations")
+          .select(REGISTRATION_FIELDS, { count: "exact" })
+          .eq("event_id", eventId)
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: true });
 
-  while (true) {
-    let query = supabase
-      .from("registrations")
-      .select(REGISTRATION_FIELDS)
-      .eq("event_id", eventId)
-      .order("created_at", { ascending: false });
+        if (filters.payment !== "all") {
+          query = query.eq("payment_status", filters.payment);
+        }
+        if (filters.gender !== "all") {
+          query = query.eq("gender", filters.gender);
+        }
+        if (filters.ticketId) {
+          query = query.eq("ticket_type_id", filters.ticketId);
+        }
+        if (filters.source) {
+          query = query.eq("source", filters.source);
+        }
 
-    if (filters.payment !== "all") {
-      query = query.eq("payment_status", filters.payment);
-    }
-    if (filters.gender !== "all") {
-      query = query.eq("gender", filters.gender);
-    }
-    if (filters.ticketId) {
-      query = query.eq("ticket_type_id", filters.ticketId);
-    }
-    if (filters.source) {
-      query = query.eq("source", filters.source);
-    }
-
-    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
-    if (error) {
-      return new NextResponse("Unable to export attendees.", { status: 500 });
-    }
-
-    const batch = (data ?? []) as unknown as RegistrationRow[];
-    for (const row of batch) {
-      const person = firstRelation(row.people);
-      if (
-        attendeeMatchesSearch(
-          {
-            fullName: row.full_name,
-            email: row.email,
-            phone: row.phone,
-            personFullName: person?.full_name,
-            personEmail: person?.email,
-            personPhone: person?.phone,
-          },
-          filters.query,
-        )
-      ) {
-        matchingRows.push(row);
-      }
-    }
-
-    if (batch.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
+        const response = await query.range(fromInclusive, toInclusive);
+        return {
+          data: response.data as unknown as RegistrationRow[] | null,
+          count: response.count,
+          error: response.error,
+        };
+      },
+      (row) => row.id,
+    );
+  } catch (error) {
+    return exportFailure(error);
   }
+
+  const matchingRows = rows.filter((row) => {
+    const person = firstRelation(row.people);
+    return attendeeMatchesSearch(
+      {
+        fullName: row.full_name,
+        email: row.email,
+        phone: row.phone,
+        personFullName: person?.full_name,
+        personEmail: person?.email,
+        personPhone: person?.phone,
+      },
+      filters.query,
+    );
+  });
 
   const csv = buildCsv(CSV_HEADERS, matchingRows.map(toCsvRow));
 
