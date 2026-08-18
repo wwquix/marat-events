@@ -13,8 +13,12 @@ const CORE_MIGRATIONS = [
   "20260815055000_phase_2_import_preview.sql",
   "20260815063744_phase_2_import_review_commit.sql",
   "20260818193000_phase_2_identity_integrity.sql",
+  "20260818195406_phase_2_segmentation.sql",
   "20260818195538_phase_3_check_in.sql",
+  "20260818200000_phase_2_campaign_outbox.sql",
+  "20260818201300_phase_4_matching.sql",
   "20260818201528_phase_5_crm.sql",
+  "20260818204122_database_integrity_hardening.sql",
 ] as const;
 
 async function migratedDatabase(): Promise<PGlite> {
@@ -269,6 +273,200 @@ test("CRM RPCs audit suppression and keep follow-up tasks terminal", async () =>
       ]),
       /follow_up_task_terminal/,
     );
+  } finally {
+    await database.close();
+  }
+});
+
+test("database hardening enforces event scope, payment identity, private access, and immutable imports", async () => {
+  const database = await migratedDatabase();
+
+  try {
+    const eventOne = "00000000-0000-4000-8000-000000000501";
+    const eventTwo = "00000000-0000-4000-8000-000000000502";
+    const ticketOne = "00000000-0000-4000-8000-000000000503";
+    await database.query(
+      `insert into public.events
+         (id, slug, title, description, venue, starts_at, price_cents, currency, status)
+       values
+         ($1, 'integrity-one', 'Integrity One', '', 'Venue', now() + interval '1 day', 1000, 'USD', 'draft'),
+         ($2, 'integrity-two', 'Integrity Two', '', 'Venue', now() + interval '1 day', 1000, 'USD', 'draft')`,
+      [eventOne, eventTwo],
+    );
+    await database.query(
+      `insert into public.ticket_types
+         (id, event_id, code, name, price_cents, currency)
+       values ($1, $2, 'general', 'General', 1000, 'USD')`,
+      [ticketOne, eventOne],
+    );
+
+    await assert.rejects(
+      database.query(
+        `insert into public.registrations
+           (event_id, ticket_type_id, full_name, email, amount_cents, currency)
+         values ($1, $2, 'Wrong Event', 'wrong@example.com', 1000, 'USD')`,
+        [eventTwo, ticketOne],
+      ),
+      /registrations_ticket_event_id_fkey/i,
+    );
+
+    await database.query(
+      `insert into public.registrations
+         (event_id, full_name, email, stripe_payment_intent_id, amount_cents, currency)
+       values ($1, 'First Payment', 'first-payment@example.com', 'pi_test_unique', 1000, 'USD')`,
+      [eventOne],
+    );
+    await assert.rejects(
+      database.query(
+        `insert into public.registrations
+           (event_id, full_name, email, stripe_payment_intent_id, amount_cents, currency)
+         values ($1, 'Duplicate Payment', 'second-payment@example.com', 'pi_test_unique', 1000, 'USD')`,
+        [eventTwo],
+      ),
+      /registrations_stripe_payment_intent_unique_idx/i,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into public.events
+           (slug, title, description, venue, starts_at, price_cents, currency, status)
+         values ('invalid-status', 'Invalid', '', 'Venue', now() + interval '1 day', 0, 'USD', 'active')`,
+      ),
+      /events_status_known_check/i,
+    );
+
+    const partialBatch = "00000000-0000-4000-8000-000000000510";
+    await database.query(
+      `insert into public.audience_import_batches
+         (id, source_type, source_label, row_count, created_by)
+       values ($1, 'csv', 'Partial batch', 2, 'operator@example.com')`,
+      [partialBatch],
+    );
+    await database.query(
+      `insert into public.audience_import_rows
+         (batch_id, row_number, decision, preview_decision)
+       values ($1, 1, 'invalid', 'invalid')`,
+      [partialBatch],
+    );
+    await assert.rejects(
+      database.query(
+        `update public.audience_import_batches
+         set status = 'committed', committed_at = now(), committed_by = 'operator@example.com'
+         where id = $1`,
+        [partialBatch],
+      ),
+      /import_batch_row_count_mismatch/i,
+    );
+
+    const committedBatch = "00000000-0000-4000-8000-000000000511";
+    const committedRow = "00000000-0000-4000-8000-000000000512";
+    await database.query(
+      `insert into public.audience_import_batches
+         (id, source_type, source_label, row_count, created_by)
+       values ($1, 'csv', 'Committed batch', 1, 'operator@example.com')`,
+      [committedBatch],
+    );
+    await database.query(
+      `insert into public.audience_import_rows
+         (id, batch_id, row_number, decision, preview_decision)
+       values ($1, $2, 1, 'invalid', 'invalid')`,
+      [committedRow, committedBatch],
+    );
+    await database.query(
+      `update public.audience_import_batches
+       set status = 'committed', committed_at = now(), committed_by = 'operator@example.com'
+       where id = $1`,
+      [committedBatch],
+    );
+
+    await assert.rejects(
+      database.query("update public.audience_import_batches set source_label = 'Changed' where id = $1", [
+        committedBatch,
+      ]),
+      /committed_import_batch_immutable/i,
+    );
+    await assert.rejects(
+      database.query("delete from public.audience_import_rows where id = $1", [committedRow]),
+      /committed_import_history_immutable/i,
+    );
+
+    const reviewBatch = "00000000-0000-4000-8000-000000000513";
+    const reviewRow = "00000000-0000-4000-8000-000000000514";
+    await database.query(
+      `insert into public.audience_import_batches
+         (id, source_type, source_label, row_count, created_by)
+       values ($1, 'csv', 'Review batch', 1, 'operator@example.com')`,
+      [reviewBatch],
+    );
+    await database.query(
+      `insert into public.audience_import_rows
+         (id, batch_id, row_number, normalized_data, decision, preview_decision)
+       values ($1, $2, 1, '{"contacts": []}'::jsonb, 'review', 'review')`,
+      [reviewRow, reviewBatch],
+    );
+    await database.query(
+      `insert into public.identity_review_queue
+         (import_batch_id, audience_import_row_id, incoming_row_number, conflict_type)
+       values ($1, $2, 1, 'manual_review')`,
+      [reviewBatch, reviewRow],
+    );
+    await database.query(
+      "select public.resolve_audience_import_review($1, 'exclude', null, 'operator@example.com', 'explicit exclusion')",
+      [reviewRow],
+    );
+    await assert.rejects(
+      database.query(
+        "update public.identity_review_queue set resolution_note = 'rewritten' where audience_import_row_id = $1",
+        [reviewRow],
+      ),
+      /import_review_resolution_immutable/i,
+    );
+
+    const normalBatch = "00000000-0000-4000-8000-000000000515";
+    const normalRow = "00000000-0000-4000-8000-000000000516";
+    await database.query(
+      `insert into public.audience_import_batches
+         (id, source_type, source_label, row_count, created_by)
+       values ($1, 'csv', 'Normal commit', 1, 'operator@example.com')`,
+      [normalBatch],
+    );
+    await database.query(
+      `insert into public.audience_import_rows
+         (id, batch_id, row_number, normalized_data, decision, preview_decision)
+       values (
+         $1,
+         $2,
+         1,
+         '{"fullName":"Imported Guest","email":"imported@example.com","phone":null,"gender":"female","city":null,"occupation":null,"education":null,"profileUrl":null,"source":"test","sourceReference":null,"contacts":[{"channel":"email","value":"imported@example.com","normalizedValue":"imported@example.com"}]}'::jsonb,
+         'new_person',
+         'new_person'
+       )`,
+      [normalRow, normalBatch],
+    );
+    const committed = await database.query<{ result: Record<string, unknown> }>(
+      "select public.commit_audience_import($1, 'operator@example.com') as result",
+      [normalBatch],
+    );
+    assert.equal(committed.rows[0]?.result.status, "committed");
+    assert.equal(committed.rows[0]?.result.committed_rows, 1);
+
+    const committedState = await database.query<{
+      status: string;
+      decision: string;
+      committed_person_id: string | null;
+    }>(
+      `select batch.status, import_row.decision, import_row.committed_person_id
+       from public.audience_import_batches as batch
+       join public.audience_import_rows as import_row on import_row.batch_id = batch.id
+       where batch.id = $1`,
+      [normalBatch],
+    );
+    assert.equal(committedState.rows[0]?.status, "committed");
+    assert.equal(committedState.rows[0]?.decision, "committed");
+    assert.match(committedState.rows[0]?.committed_person_id ?? "", /^[0-9a-f-]{36}$/i);
+
+    await database.exec("set role anon;");
+    await assert.rejects(database.query("select id from public.people limit 1"), /permission denied/i);
+    await database.exec("reset role;");
   } finally {
     await database.close();
   }
