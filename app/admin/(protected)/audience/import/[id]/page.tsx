@@ -11,6 +11,7 @@ import {
   type ImportPreviewDecision,
   type ReviewResolutionAction,
 } from "@/lib/audience/commit";
+import { loadCompleteRange } from "@/lib/audience/load";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import {
   commitAudienceImportAction,
@@ -121,39 +122,74 @@ export default async function AudienceImportPreviewPage({ params, searchParams }
   const resolvedSearchParams = await searchParams;
 
   const supabase = createSupabaseServerClient();
-  const [{ data: batch, error: batchError }, { data: rows, error: rowsError }, { data: reviews, error: reviewsError }] =
-    await Promise.all([
-      supabase
-        .from("audience_import_batches")
-        .select(
-          "id,source_label,source_reference,source_type,status,row_count,created_by,created_at,committed_at,committed_by",
-        )
-        .eq("id", batchId)
-        .maybeSingle(),
-      supabase
-        .from("audience_import_rows")
-        .select(
-          "id,row_number,normalized_data,decision,preview_decision,candidate_person_ids,errors,committed_person_id,committed_at",
-        )
-        .eq("batch_id", batchId)
-        .order("row_number", { ascending: true })
-        .limit(MAX_IMPORT_ROWS),
-      supabase
-        .from("identity_review_queue")
-        .select(
-          "audience_import_row_id,resolution_action,resolved_person_id,resolved_by,resolution_note,resolved_at",
-        )
-        .eq("import_batch_id", batchId)
-        .not("audience_import_row_id", "is", null)
-        .limit(MAX_IMPORT_ROWS),
-    ]);
+  const { data: batch, error: batchError } = await supabase
+    .from("audience_import_batches")
+    .select(
+      "id,source_label,source_reference,source_type,status,row_count,created_by,created_at,committed_at,committed_by",
+    )
+    .eq("id", batchId)
+    .maybeSingle();
 
-  if (batchError || rowsError || reviewsError) throw new Error("Unable to load audience import preview.");
+  if (batchError) throw new Error("Unable to load audience import preview.");
   if (!batch) notFound();
 
   const typedBatch = batch as BatchRow;
-  const allRows = (rows ?? []) as PreviewRow[];
-  const typedReviews = (reviews ?? []) as ReviewRow[];
+  if (
+    typeof typedBatch.row_count !== "number" ||
+    !Number.isInteger(typedBatch.row_count) ||
+    typedBatch.row_count < 0 ||
+    typedBatch.row_count > MAX_IMPORT_ROWS
+  ) {
+    throw new Error("Unable to load audience import preview.");
+  }
+
+  let allRows: PreviewRow[];
+  let typedReviews: ReviewRow[];
+  try {
+    [allRows, typedReviews] = await Promise.all([
+      loadCompleteRange<PreviewRow>({
+        maxTotal: MAX_IMPORT_ROWS,
+        fetchRange: async (fromInclusive, toInclusive) => {
+          const { data, count, error } = await supabase
+            .from("audience_import_rows")
+            .select(
+              "id,row_number,normalized_data,decision,preview_decision,candidate_person_ids,errors,committed_person_id,committed_at",
+              { count: "exact" },
+            )
+            .eq("batch_id", batchId)
+            .order("row_number", { ascending: true })
+            .order("id", { ascending: true })
+            .range(fromInclusive, toInclusive);
+
+          return { data: data as PreviewRow[] | null, count, error };
+        },
+      }),
+      loadCompleteRange<ReviewRow>({
+        maxTotal: MAX_IMPORT_ROWS,
+        fetchRange: async (fromInclusive, toInclusive) => {
+          const { data, count, error } = await supabase
+            .from("identity_review_queue")
+            .select(
+              "audience_import_row_id,resolution_action,resolved_person_id,resolved_by,resolution_note,resolved_at",
+              { count: "exact" },
+            )
+            .eq("import_batch_id", batchId)
+            .not("audience_import_row_id", "is", null)
+            .order("audience_import_row_id", { ascending: true })
+            .range(fromInclusive, toInclusive);
+
+          return { data: data as ReviewRow[] | null, count, error };
+        },
+      }),
+    ]);
+  } catch {
+    throw new Error("Unable to load audience import preview.");
+  }
+
+  if (allRows.length !== typedBatch.row_count || typedReviews.length > allRows.length) {
+    throw new Error("Unable to load audience import preview.");
+  }
+
   const reviewByRowId = new Map(typedReviews.map((review) => [review.audience_import_row_id, review]));
   const policyRows: ImportCommitRow[] = allRows.map((row) => {
     const review = reviewByRowId.get(row.id);
