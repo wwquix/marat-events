@@ -1,39 +1,10 @@
-export type PersonIdentityInput = {
-  fullName: string;
-  email: string;
-  phone: string;
-  gender: "male" | "female";
-};
-
-export type PersonRepository = {
-  loadByEmail(email: string): Promise<string | null>;
-  create(input: PersonIdentityInput): Promise<string>;
-};
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Resolve a central person record by normalized email without allowing a public
- * registration to overwrite an existing person's trusted central fields.
- *
- * If two requests race to create the same unique email, the loser reloads once
- * and reuses the row created by the winner.
+ * Validate the UUID returned by the server-only identity-resolution RPC before
+ * using it as a registration foreign key.
  */
-export async function resolvePersonIdentity(
-  repository: PersonRepository,
-  input: PersonIdentityInput,
-): Promise<string> {
-  const existingPersonId = await repository.loadByEmail(input.email);
-  if (existingPersonId) {
-    return existingPersonId;
-  }
-
-  try {
-    return await repository.create(input);
-  } catch (error) {
-    const concurrentPersonId = await repository.loadByEmail(input.email);
-    if (concurrentPersonId) {
-      return concurrentPersonId;
-    }
-
-    throw error;
-  }
+export function parseResolvedPersonId(value: unknown): string | null {
+  return typeof value === "string" && UUID_PATTERN.test(value) ? value : null;
 }

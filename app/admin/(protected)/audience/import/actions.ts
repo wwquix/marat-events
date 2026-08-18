@@ -18,7 +18,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 const IDENTITY_CHANNELS: ContactChannel[] = ["email", "phone", "instagram", "linkedin"];
 const PAGE_SIZE = 1000;
 
-type PersonIdentityRow = { id: string; email: string | null };
+type PersonIdentityRow = { id: string; email: string | null; phone: string | null };
 type ContactIdentityRow = { person_id: string; channel: string; normalized_value: string };
 type InsertedImportRow = {
   id: string;
@@ -72,7 +72,7 @@ async function loadAllPeople(): Promise<PersonIdentityRow[]> {
   for (let start = 0; ; start += PAGE_SIZE) {
     const { data, error } = await supabase
       .from("people")
-      .select("id,email")
+      .select("id,email,phone")
       .order("id", { ascending: true })
       .range(start, start + PAGE_SIZE - 1);
 
@@ -116,13 +116,25 @@ async function buildExistingIdentityIndex(): Promise<ExistingIdentityIndex> {
     if (person.email) {
       addIdentity(index, identityKey("email", person.email.trim().toLowerCase()), person.id);
     }
+
+    const normalizedPhone = person.phone?.replace(/\D/g, "") ?? "";
+    if (normalizedPhone) {
+      addIdentity(index, identityKey("phone", normalizedPhone), person.id);
+    }
   }
 
   for (const contact of contacts) {
     if (!IDENTITY_CHANNELS.includes(contact.channel as ContactChannel)) continue;
+    const normalizedValue =
+      contact.channel === "email"
+        ? contact.normalized_value.trim().toLowerCase()
+        : contact.channel === "phone"
+          ? contact.normalized_value.replace(/\D/g, "")
+          : contact.normalized_value;
+    if (!normalizedValue) continue;
     addIdentity(
       index,
-      identityKey(contact.channel as ContactChannel, contact.normalized_value),
+      identityKey(contact.channel as ContactChannel, normalizedValue),
       contact.person_id,
     );
   }

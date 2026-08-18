@@ -11,10 +11,7 @@ import {
   parseCheckoutTicketType,
   validateCheckoutInput,
 } from "@/lib/checkout/rules";
-import {
-  resolvePersonIdentity,
-  type PersonRepository,
-} from "@/lib/checkout/person";
+import { parseResolvedPersonId } from "@/lib/checkout/person";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getStripeServerClient } from "@/lib/stripe/server";
 
@@ -99,55 +96,6 @@ function isIdRow(value: unknown): value is { id: string } {
     typeof (value as Record<string, unknown>).id === "string" &&
     ((value as Record<string, unknown>).id as string).length > 0
   );
-}
-
-function createPersonRepository(supabase: SupabaseClient): PersonRepository {
-  return {
-    async loadByEmail(email) {
-      const { data, error } = await supabase
-        .from("people")
-        .select("id")
-        .eq("email", email)
-        .maybeSingle();
-
-      if (error) {
-        throw error;
-      }
-
-      if (data === null) {
-        return null;
-      }
-
-      if (!isIdRow(data)) {
-        throw new Error("Person lookup returned invalid data.");
-      }
-
-      return data.id;
-    },
-
-    async create(input) {
-      const { data, error } = await supabase
-        .from("people")
-        .insert({
-          full_name: input.fullName,
-          email: input.email,
-          phone: input.phone,
-          gender: input.gender,
-        })
-        .select("id")
-        .single();
-
-      if (error) {
-        throw error;
-      }
-
-      if (!isIdRow(data)) {
-        throw new Error("Person creation returned invalid data.");
-      }
-
-      return data.id;
-    },
-  };
 }
 
 export async function POST(request: NextRequest) {
@@ -303,17 +251,29 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  let personId: string;
+  const personQuery = await attemptDatabaseOperation(() =>
+    supabase.rpc("resolve_registration_person", {
+      p_full_name: fullName,
+      p_email: email,
+      p_phone: phone,
+      p_gender: gender,
+    }),
+  );
 
-  try {
-    personId = await resolvePersonIdentity(createPersonRepository(supabase), {
-      fullName,
-      email,
-      phone,
-      gender,
-    });
-  } catch (error) {
-    logCheckoutFailure("resolve_person", { eventSlug: slug, eventId: event.id }, error);
+  if (!personQuery.ok) {
+    logCheckoutFailure(
+      "resolve_person",
+      { eventSlug: slug, eventId: event.id },
+      personQuery.error,
+    );
+    return redirectToEvent(request, slug, "database");
+  }
+
+  const { data: personData, error: personError } = personQuery.value;
+  const personId = personError ? null : parseResolvedPersonId(personData);
+
+  if (!personId) {
+    logCheckoutFailure("resolve_person", { eventSlug: slug, eventId: event.id });
     return redirectToEvent(request, slug, "database");
   }
 
