@@ -14,6 +14,7 @@ const CORE_MIGRATIONS = [
   "20260815063744_phase_2_import_review_commit.sql",
   "20260818193000_phase_2_identity_integrity.sql",
   "20260818195538_phase_3_check_in.sql",
+  "20260818201528_phase_5_crm.sql",
 ] as const;
 
 async function migratedDatabase(): Promise<PGlite> {
@@ -186,6 +187,88 @@ test("check-in RPCs enforce payment, event scope, revocation, and duplicate safe
       "select count(*)::integer as count from public.check_in_attempts",
     );
     assert.equal(attempts.rows[0]?.count, 5);
+  } finally {
+    await database.close();
+  }
+});
+
+test("CRM RPCs audit suppression and keep follow-up tasks terminal", async () => {
+  const database = await migratedDatabase();
+
+  try {
+    const personId = "00000000-0000-4000-8000-000000000301";
+    const taskId = "00000000-0000-4000-8000-000000000302";
+    await database.query(
+      `insert into public.people (id, full_name, email, gender)
+       values ($1, 'CRM Guest', 'crm@example.com', 'female')`,
+      [personId],
+    );
+    await database.query(
+      `insert into public.follow_up_tasks (id, person_id, title, created_by)
+       values ($1, $2, 'Call guest', 'operator@example.com')`,
+      [taskId, personId],
+    );
+
+    const suppressed = await database.query<{ set_person_suppression: boolean }>(
+      "select public.set_person_suppression($1, $2, $3, $4)",
+      [personId, "suppressed", "explicit request", "operator@example.com"],
+    );
+    assert.equal(suppressed.rows[0]?.set_person_suppression, true);
+
+    const duplicate = await database.query<{ set_person_suppression: boolean }>(
+      "select public.set_person_suppression($1, $2, $3, $4)",
+      [personId, "suppressed", "duplicate request", "operator@example.com"],
+    );
+    assert.equal(duplicate.rows[0]?.set_person_suppression, false);
+
+    const reactivated = await database.query<{ set_person_suppression: boolean }>(
+      "select public.set_person_suppression($1, $2, $3, $4)",
+      [personId, "active", "operator verified reactivation", "operator@example.com"],
+    );
+    assert.equal(reactivated.rows[0]?.set_person_suppression, true);
+
+    const person = await database.query<{ suppression_status: string; suppression_reason: string | null }>(
+      "select suppression_status, suppression_reason from public.people where id = $1",
+      [personId],
+    );
+    assert.deepEqual(person.rows[0], { suppression_status: "active", suppression_reason: null });
+
+    const suppressionEvents = await database.query<{
+      previous_status: string;
+      new_status: string;
+      reason: string;
+    }>(
+      `select previous_status, new_status, reason
+       from public.person_suppression_events
+       where person_id = $1
+       order by changed_at, id`,
+      [personId],
+    );
+    assert.deepEqual(suppressionEvents.rows, [
+      { previous_status: "active", new_status: "suppressed", reason: "explicit request" },
+      { previous_status: "suppressed", new_status: "active", reason: "operator verified reactivation" },
+    ]);
+
+    const completed = await database.query<{ set_follow_up_task_status: boolean }>(
+      "select public.set_follow_up_task_status($1, $2, $3)",
+      [taskId, "completed", "operator@example.com"],
+    );
+    assert.equal(completed.rows[0]?.set_follow_up_task_status, true);
+
+    const repeated = await database.query<{ set_follow_up_task_status: boolean }>(
+      "select public.set_follow_up_task_status($1, $2, $3)",
+      [taskId, "completed", "operator@example.com"],
+    );
+    assert.equal(repeated.rows[0]?.set_follow_up_task_status, false);
+
+    await assert.rejects(
+      database.query("select public.set_follow_up_task_status($1, $2, $3)", [
+        taskId,
+        "cancelled",
+        "operator@example.com",
+      ]),
+      /follow_up_task_terminal/,
+    );
   } finally {
     await database.close();
   }
