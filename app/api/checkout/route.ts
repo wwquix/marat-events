@@ -12,6 +12,8 @@ import {
   validateCheckoutInput,
 } from "@/lib/checkout/rules";
 import { parseResolvedPersonId } from "@/lib/checkout/person";
+import { createPendingRegistrationWithInvitation } from "@/lib/invitations/server";
+import { parseInvitationToken } from "@/lib/invitations/token";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getStripeServerClient } from "@/lib/stripe/server";
 
@@ -55,9 +57,11 @@ function redirectToEvent(
   request: NextRequest,
   slug: string,
   errorCode: CheckoutErrorCode,
+  invitationToken: string | null = null,
 ) {
   const eventUrl = new URL(`/events/${encodeURIComponent(slug)}`, request.nextUrl.origin);
   eventUrl.searchParams.set("checkout_error", errorCode);
+  if (invitationToken) eventUrl.searchParams.set("invite", invitationToken);
   return NextResponse.redirect(eventUrl, 303);
 }
 
@@ -108,6 +112,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid checkout request." }, { status: 400 });
   }
 
+  const invitationToken = parseInvitationToken(
+    rawInput && typeof rawInput === "object"
+      ? (rawInput as Record<string, unknown>).invite_token
+      : null,
+  );
   const validation = validateCheckoutInput(rawInput);
   if (!validation.ok) {
     const candidateSlug =
@@ -116,20 +125,22 @@ export async function POST(request: NextRequest) {
         : undefined;
 
     if (typeof candidateSlug === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidateSlug)) {
-      return redirectToEvent(request, candidateSlug, "invalid");
+      return redirectToEvent(request, candidateSlug, "invalid", invitationToken);
     }
 
     return NextResponse.json({ error: "Invalid checkout request." }, { status: 400 });
   }
 
   const { slug, fullName, email, phone, age, gender, ticketTypeId } = validation.value;
+  const redirectWithError = (errorCode: CheckoutErrorCode) =>
+    redirectToEvent(request, slug, errorCode, invitationToken);
   let supabase: SupabaseClient;
 
   try {
     supabase = createSupabaseServerClient();
   } catch (error) {
     logCheckoutFailure("load_event", { eventSlug: slug }, error);
-    return redirectToEvent(request, slug, "database");
+    return redirectWithError("database");
   }
 
   const eventQuery = await attemptDatabaseOperation(() =>
@@ -142,14 +153,14 @@ export async function POST(request: NextRequest) {
 
   if (!eventQuery.ok) {
     logCheckoutFailure("load_event", { eventSlug: slug }, eventQuery.error);
-    return redirectToEvent(request, slug, "database");
+    return redirectWithError("database");
   }
 
   const { data: eventData, error: eventError } = eventQuery.value;
 
   if (eventError) {
     logCheckoutFailure("load_event", { eventSlug: slug });
-    return redirectToEvent(request, slug, "database");
+    return redirectWithError("database");
   }
 
   if (eventData === null) {
@@ -159,11 +170,11 @@ export async function POST(request: NextRequest) {
   const event = parseCheckoutEvent(eventData);
   if (!event) {
     logCheckoutFailure("load_event", { eventSlug: slug });
-    return redirectToEvent(request, slug, "database");
+    return redirectWithError("database");
   }
 
   if (!isEventAvailableForSale(event)) {
-    return redirectToEvent(request, slug, "unavailable");
+    return redirectWithError("unavailable");
   }
 
   const ticketQuery = await attemptDatabaseOperation(() =>
@@ -177,18 +188,18 @@ export async function POST(request: NextRequest) {
 
   if (!ticketQuery.ok) {
     logCheckoutFailure("load_ticket", { eventSlug: slug, eventId: event.id }, ticketQuery.error);
-    return redirectToEvent(request, slug, "database");
+    return redirectWithError("database");
   }
 
   const { data: ticketData, error: ticketError } = ticketQuery.value;
   const ticket = ticketError ? null : parseCheckoutTicketType(ticketData);
 
   if (!ticket) {
-    return redirectToEvent(request, slug, ticketError ? "database" : "unavailable");
+    return redirectWithError(ticketError ? "database" : "unavailable");
   }
 
   if (!isTicketAvailableForSale(ticket) || !doesTicketMatchGender(ticket, gender)) {
-    return redirectToEvent(request, slug, "unavailable");
+    return redirectWithError("unavailable");
   }
 
   if (event.capacity !== null) {
@@ -206,18 +217,18 @@ export async function POST(request: NextRequest) {
         { eventSlug: slug, eventId: event.id },
         countQuery.error,
       );
-      return redirectToEvent(request, slug, "database");
+      return redirectWithError("database");
     }
 
     const { count, error: countError } = countQuery.value;
 
     if (countError || count === null) {
       logCheckoutFailure("count_event_capacity", { eventSlug: slug, eventId: event.id });
-      return redirectToEvent(request, slug, "database");
+      return redirectWithError("database");
     }
 
     if (isSoldOut(event.capacity, count)) {
-      return redirectToEvent(request, slug, "sold_out");
+      return redirectWithError("sold_out");
     }
   }
 
@@ -236,18 +247,18 @@ export async function POST(request: NextRequest) {
         { eventSlug: slug, eventId: event.id },
         countQuery.error,
       );
-      return redirectToEvent(request, slug, "database");
+      return redirectWithError("database");
     }
 
     const { count, error: countError } = countQuery.value;
 
     if (countError || count === null) {
       logCheckoutFailure("count_ticket_capacity", { eventSlug: slug, eventId: event.id });
-      return redirectToEvent(request, slug, "database");
+      return redirectWithError("database");
     }
 
     if (isSoldOut(ticket.capacity, count)) {
-      return redirectToEvent(request, slug, "sold_out");
+      return redirectWithError("sold_out");
     }
   }
 
@@ -266,7 +277,7 @@ export async function POST(request: NextRequest) {
       { eventSlug: slug, eventId: event.id },
       personQuery.error,
     );
-    return redirectToEvent(request, slug, "database");
+    return redirectWithError("database");
   }
 
   const { data: personData, error: personError } = personQuery.value;
@@ -278,24 +289,19 @@ export async function POST(request: NextRequest) {
   }
 
   const registrationQuery = await attemptDatabaseOperation(() =>
-    supabase
-      .from("registrations")
-      .insert({
-        event_id: event.id,
-        person_id: personId,
-        ticket_type_id: ticket.id,
-        full_name: fullName,
-        email,
-        phone,
-        age,
-        gender,
-        source: "event_page",
-        amount_cents: ticket.priceCents,
-        currency: ticket.currency,
-        payment_status: "pending",
-      })
-      .select("id")
-      .single(),
+    createPendingRegistrationWithInvitation(supabase, {
+      eventId: event.id,
+      personId,
+      ticketTypeId: ticket.id,
+      fullName,
+      email,
+      phone,
+      age,
+      gender,
+      amountCents: ticket.priceCents,
+      currency: ticket.currency,
+      invitationToken,
+    }),
   );
 
   if (!registrationQuery.ok) {
@@ -304,17 +310,10 @@ export async function POST(request: NextRequest) {
       { eventSlug: slug, eventId: event.id },
       registrationQuery.error,
     );
-    return redirectToEvent(request, slug, "database");
+    return redirectWithError("database");
   }
 
-  const { data: registrationData, error: registrationError } = registrationQuery.value;
-
-  if (registrationError || !isIdRow(registrationData)) {
-    logCheckoutFailure("insert_registration", { eventSlug: slug, eventId: event.id });
-    return redirectToEvent(request, slug, "database");
-  }
-
-  const registrationId = registrationData.id;
+  const registrationId = registrationQuery.value.registrationId;
   let sessionId: string;
   let sessionUrl: string;
 
@@ -337,7 +336,7 @@ export async function POST(request: NextRequest) {
       { eventSlug: slug, eventId: event.id, registrationId },
       error,
     );
-    return redirectToEvent(request, slug, "stripe");
+    return redirectWithError("stripe");
   }
 
   const updateQuery = await attemptDatabaseOperation(() =>
@@ -356,7 +355,7 @@ export async function POST(request: NextRequest) {
       { eventSlug: slug, eventId: event.id, registrationId },
       updateQuery.error,
     );
-    return redirectToEvent(request, slug, "database");
+    return redirectWithError("database");
   }
 
   const { data: updatedRegistration, error: updateError } = updateQuery.value;
@@ -367,7 +366,7 @@ export async function POST(request: NextRequest) {
       eventId: event.id,
       registrationId,
     });
-    return redirectToEvent(request, slug, "database");
+    return redirectWithError("database");
   }
 
   return NextResponse.redirect(sessionUrl, 303);
