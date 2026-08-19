@@ -103,7 +103,7 @@ Gate to Phase 2: **passed**. Marat can create an event, configure tickets, recei
 
 ---
 
-## Phase 2 — Audience database, import and invitations — IN PROGRESS
+## Phase 2 — Audience database, import and invitations — FOUNDATION IMPLEMENTED, GATE OPEN
 
 Goal: load the existing ~600-person audience and manage invitations safely.
 
@@ -117,72 +117,79 @@ Goal: load the existing ~600-person audience and manage invitations safely.
 - identity-conflict / human-review state;
 - RLS with no public policies for new audience tables.
 
-### 2.2 Import pipeline — IN PROGRESS
+### 2.2 Import pipeline — FOUNDATION IMPLEMENTED, HARDENING OPEN
 - CSV/Sheets-friendly import format — complete;
 - validation preview before commit — complete and staging-verified;
 - normalized email/phone/Instagram/LinkedIn handling — complete;
 - deterministic dedupe on trusted identifiers, never by name alone — complete for preview and commit;
 - explicit review resolution to reuse, create or exclude — complete;
-- atomic, retry-safe PostgreSQL commit with current-state identity revalidation — complete;
+- complete 5,000-row review UI and hosted 1,000-row API-cap handling — complete;
+- atomic, retry-safe PostgreSQL commit with current-state and batch-wide planned-ownership revalidation — complete;
+- committed-batch row-count equality, immutable history and shared review/commit lock order — complete;
+- atomic preview persistence and explicit cleanup-failure reporting — pending;
 - staging E2E verification of review resolution and commit — pending after migration deployment;
 - operational validation with the full real-audience import remains pending.
 
-### 2.3 Segmentation and invite targeting
-- event audience/segment selection;
-- eligible/ineligible reasoning;
-- no invite to suppressed/opted-out contacts;
-- source and campaign attribution.
+### 2.3 Segmentation and invite targeting — FOUNDATION IMPLEMENTED
+- typed audience segments and event-scoped criteria snapshots;
+- deterministic eligible/ineligible reason codes;
+- explicit include/exclude overrides that cannot bypass suppression or required-channel safety;
+- shared service-role-only SQL evaluator for selection and campaign preview;
+- source/import/prior-registration/contact criteria;
+- staging full-data performance and product acceptance — pending.
 
-### 2.4 Safe outbound architecture
-Before any real provider sends messages:
-- Policy Engine;
-- Outbox;
-- AuditLog;
-- DRY_RUN mode;
-- idempotency keys;
-- channel consent checks;
+### 2.4 Safe outbound architecture — PROVIDER-DISABLED FOUNDATION IMPLEMENTED
+- deterministic Policy Engine with live suppression, identity, consent, contactability and ownership checks;
+- immutable template versions and deterministic rendering;
+- durable Outbox, immutable delivery attempts and audit history;
+- database and application DRY_RUN/disabled enforcement with `provider_called=false`;
+- idempotency keys, claim leases, bounded attempts and concurrent-worker-safe claiming;
 - America/New_York sending-window rules;
-- retry/failure state machine;
-- LLM separated from send/state mutation.
+- LLM separated from send/state mutation;
+- no real provider adapter, SDK, credential or delivery webhook.
 
-### 2.5 Invitation delivery
-- connect the approved provider/channel(s);
-- invitation templates and tracked event links;
-- sent/delivered/failed/opted-out statuses where provider data supports them;
-- STOP/unsubscribe handling where applicable.
+### 2.5 Invitation delivery — ATTRIBUTION FOUNDATION ONLY
+- opaque `mi_` tracked-link tokens with hash-only persistence — implemented;
+- immutable event/campaign-recipient/intended-person binding, expiry and audited revocation — implemented;
+- valid active intended-person checkout attribution to `campaign_invite`, with invalid/forwarded tokens falling back to ordinary `event_page` — implemented;
+- operator issuance/revocation UI and approved secure raw-link distribution — pending;
+- connect the approved provider/channel(s) — pending;
+- sent/delivered/failed/opted-out statuses where provider data supports them — pending;
+- STOP/unsubscribe handling where applicable — pending.
 
-### 2.6 Phase 2 E2E gate
+### 2.6 Phase 2 E2E gate — PENDING
 - import a staging sample and then the real audience after review;
 - select a segment;
 - DRY_RUN shows exactly who would be contacted and why;
 - controlled staging/approved live test;
-- registration source traces back to invite/campaign.
+- registration source traces back to a valid invite/campaign without misattributing a forwarded token.
 
 Gate to Phase 3: the audience can be imported, deduplicated/reviewed, segmented and invited with consent, auditability and deterministic state.
 
 ---
 
-## Phase 3 — QR tickets and event check-in
+## Phase 3 — QR tickets and event check-in — FOUNDATION IMPLEMENTED, GATE OPEN
 
 Goal: know who actually attended.
 
-### 3.1 Ticket/check-in identity
-- secure opaque check-in token per eligible paid registration;
+### 3.1 Ticket/check-in identity — FOUNDATION IMPLEMENTED
+- secure opaque, hash-only check-in token per eligible paid registration;
 - no sensitive personal/payment data encoded directly in the QR;
-- token revocation/invalid-state handling.
+- issue/reissue, expiry, revocation and invalid-state handling.
 
-### 3.2 Check-in UI
-- mobile-friendly scanner/admin page;
-- valid / already checked in / invalid / unpaid feedback;
-- manual attendee search fallback;
-- check-in timestamp and operator audit trail.
+### 3.2 Check-in UI — FOUNDATION IMPLEMENTED
+- protected event check-in page and public bearer-token ticket page;
+- valid / already checked in / wrong-event / revoked / expired / unpaid feedback;
+- manual token input and attendee search fallback;
+- check-in timestamp and operator audit trail;
+- camera scanning and real-phone/browser verification — pending.
 
-### 3.3 Attendance state
+### 3.3 Attendance state — FOUNDATION IMPLEMENTED
 - checked-in state/history;
 - prevent accidental duplicate check-ins while keeping audit history;
 - event attendance counts.
 
-### 3.4 Phase 3 E2E gate
+### 3.4 Phase 3 E2E gate — PENDING
 - paid registration -> QR -> scan -> attendee becomes checked in;
 - duplicate scan is safe;
 - unpaid/invalid token cannot check in;
@@ -192,33 +199,36 @@ Gate to Phase 4: check-in can be operated reliably from a phone at a real event.
 
 ---
 
-## Phase 4 — Likes and mutual matches
+## Phase 4 — Likes and mutual matches — PRIVACY FOUNDATION IMPLEMENTED, GATE OPEN
 
 Goal: automate the core post-event dating-event outcome without leaking one-sided interest.
 
-### 4.1 Participant access
-- secure post-event access tied to an eligible checked-in participant;
-- expiration/revocation rules;
-- no broad public attendee directory.
+### 4.1 Participant access — FOUNDATION IMPLEMENTED
+- separate secure hash-only post-event token tied to a paid, checked-in participant;
+- expiration, reissue and revocation rules;
+- explicit event-scoped participant profile activation;
+- no broad public attendee directory;
+- approved secure token distribution — pending.
 
-### 4.2 Like flow
-- show only eligible opposite/target audience according to event rules;
-- submit/update likes idempotently;
-- prevent self-like and cross-event like;
-- preserve privacy of one-sided likes.
+### 4.2 Like flow — PARTIAL FOUNDATION
+- same-event active paid+checked-in candidate enforcement — complete;
+- submit repeated likes idempotently — complete;
+- prevent self-like and cross-event like — complete;
+- preserve privacy of one-sided identities and counts — complete;
+- eligible opposite/target audience and preference policy — pending product decision and implementation.
 
-### 4.3 Match engine
+### 4.3 Match engine — FOUNDATION IMPLEMENTED
 - deterministic mutual-like calculation;
 - unique match records;
 - race-safe/idempotent creation;
 - only mutual matches are releasable to participants.
 
-### 4.4 Match delivery
-- participant match results page and/or approved notification channel;
-- release only the data explicitly allowed by product policy;
-- audit match notifications.
+### 4.4 Match delivery — PARTIAL FOUNDATION
+- participant results page exposes only the current limited mutual profile fields;
+- real notification channel and audited notification delivery — pending;
+- participant contact release policy — not approved and not implemented.
 
-### 4.5 Phase 4 E2E gate
+### 4.5 Phase 4 E2E gate — PENDING
 - two checked-in test participants like each other;
 - one-sided likes stay private;
 - one mutual match is created exactly once;
@@ -228,33 +238,42 @@ Gate to Phase 5: full event lifecycle works from payment through mutual match.
 
 ---
 
-## Phase 5 — Analytics, follow-up and operational CRM
+## Phase 5 — Analytics, follow-up and operational CRM — FOUNDATION IMPLEMENTED, GATE OPEN
 
 Goal: make the system useful after each event and across many events.
 
-### 5.1 Funnel analytics
-- audience -> invited -> registered -> paid -> checked in -> liked -> matched;
-- conversion by event/ticket/source/campaign;
-- gender/audience balance where appropriate;
-- operational counts derived from SQL, not spreadsheets.
+### 5.1 Funnel analytics — FOUNDATION IMPLEMENTED
+- audience selection, campaigns/outbox, registered, paid, checked-in, active matching, liked and matched counts;
+- distinct-person metrics where applicable;
+- conversion context by ticket, source and campaign;
+- paid revenue plus remaining/oversold capacity signals;
+- operational counts derived live from service-role-only SQL, not mutable counters or spreadsheets;
+- explicit warning when an audience evaluation exceeds the 5,000-row bound;
+- hosted query-plan/performance verification with realistic data — pending.
 
-### 5.2 Event summary
-- per-event operational dashboard;
-- attendance and match summary;
-- exceptions requiring attention;
-- exportable report.
+### 5.2 Event summary — FOUNDATION IMPLEMENTED
+- protected per-event operational dashboard;
+- attendance, campaign/outbox and matching summary;
+- ticket/source/campaign breakdowns and capacity exceptions;
+- private/no-store CSV exports for audience, attendees, campaign results, event summary and mutual matches;
+- deterministic paging through 5,000 rows and spreadsheet-formula neutralization;
+- browser/large-file staging verification — pending.
 
-### 5.3 Follow-up/CRM layer
-- person event history;
-- invitation/registration/attendance history;
-- follow-up tasks/statuses;
-- source attribution;
-- notes with explicit permissions/audit where sensitive.
+### 5.3 Follow-up/CRM layer — FOUNDATION IMPLEMENTED
+- canonical-person operational index and detail history;
+- registration/payment/check-in visibility;
+- bounded follow-up tasks with terminal status enforcement;
+- source attribution, tags and bounded notes;
+- immutable suppression/reactivation history;
+- bounded campaign, invitation, attributed-registration and Outbox history on the canonical person detail;
+- mutual-match history without one-sided like queries, identities or counts;
+- production permissions, retention and multi-operator audit model — pending.
 
-### 5.4 Sheets/report mirror
-- optional reporting sync/export for the team's existing workflow;
-- one-way or controlled sync so SQL remains authoritative;
-- sync failures visible and retryable.
+### 5.4 Sheets/report mirror — EXPORT FOUNDATION ONLY
+- protected CSV reporting exports — implemented;
+- optional Sheets sync for the team's workflow — not connected;
+- any future sync must remain one-way/controlled so SQL is authoritative;
+- future sync failures must be visible and retryable.
 
 ### 5.5 AI assistance (only after deterministic workflow exists)
 - read-only summaries, classification suggestions and report drafting;
@@ -266,7 +285,7 @@ Gate to Phase 6: Marat can operate multiple events and understand the complete f
 
 ---
 
-## Phase 6 — Production hardening and launch
+## Phase 6 — Production hardening and launch — STARTED, PRODUCTION BLOCKED
 
 Goal: move from staging/test product to a safe production service owned by Marat's business.
 
@@ -275,6 +294,8 @@ Goal: move from staging/test product to a safe production service owned by Marat
 - Marat-owned Stripe production account/credentials;
 - real domain and email/sending-domain configuration as applicable;
 - test and production data/keys strictly separated.
+
+Current foundation classifies staging server variables and keeps production fail closed. Canonical URL policy and production/provider variable contracts remain intentionally undefined until implementation approval.
 
 ### 6.2 Payment and capacity correctness
 - transactional/concurrency-safe capacity enforcement before real ticket sales;
@@ -285,19 +306,20 @@ Goal: move from staging/test product to a safe production service owned by Marat
 ### 6.3 Security/privacy
 - production RLS/authorization review;
 - rate limits/abuse controls on public actions;
-- security headers and input limits;
+- conservative response headers — implemented;
+- Content Security Policy and complete input limits — pending;
 - secret rotation procedure;
 - data retention/deletion policy;
 - export/privacy process appropriate to stored personal data.
 
 ### 6.4 Reliability
-- structured operational logging without leaking sensitive data;
+- structured redaction/logger foundation — implemented but not adopted at every log site;
 - error/uptime monitoring;
 - backup schedule;
 - tested restore procedure;
 - migration rollback/recovery plan;
 - webhook/outbox retry monitoring;
-- incident runbook.
+- initial incident/restore runbook — documented; owners/platform procedures still pending.
 
 ### 6.5 Production acceptance test
 - one controlled real-money test with Marat's production Stripe account;

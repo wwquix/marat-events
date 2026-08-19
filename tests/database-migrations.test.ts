@@ -18,7 +18,9 @@ const CORE_MIGRATIONS = [
   "20260818200000_phase_2_campaign_outbox.sql",
   "20260818201300_phase_4_matching.sql",
   "20260818201528_phase_5_crm.sql",
+  "20260818204014_phase_6_event_analytics.sql",
   "20260818204122_database_integrity_hardening.sql",
+  "20260818205940_phase_2_invitation_attribution.sql",
 ] as const;
 
 async function migratedDatabase(): Promise<PGlite> {
