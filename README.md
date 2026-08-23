@@ -42,6 +42,16 @@ Phase 1's acceptance gate was completed on staging with an event created from th
 - protected CSV export that respects current filters/search;
 - CSV formula-injection neutralization and UTF-8 Excel compatibility.
 
+### Audience import
+
+- protected CSV upload and non-mutating validation preview;
+- trusted-identifier matching for email, phone, Instagram and LinkedIn, never by name alone;
+- explicit review outcomes: reuse an offered candidate, create a new person when safe, or exclude the row;
+- review audit data with resolver identity and timestamp;
+- an explicit atomic PostgreSQL commit that locks the batch and revalidates current identities;
+- retry-safe committed batches and fail-closed rollback on stale or ambiguous identity conflicts;
+- imported contacts retain `consent_status=unknown` and `contactability_status=unknown`.
+
 ## Requirements
 
 - Node.js 22+
@@ -96,6 +106,10 @@ The Phase 0/1 schema includes:
 - `ticket_types`.
 
 Phase 2 expands the central audience model with import provenance, contact channels, consent/contactability, suppression and identity-review state.
+
+The import commit runs through the server-only `commit_audience_import` RPC. The function serializes audience import commits with a transaction-scoped advisory lock, locks the selected preview batch, validates every eligible row before writing, then creates/reuses people and contacts in the same PostgreSQL transaction. Invalid and explicitly excluded rows remain as non-committed history.
+
+Do not apply migrations to staging from a development task. After merge, review and apply migrations through the normal staging deployment process, then verify the audience import flow with test data only.
 
 RLS is enabled on protected application tables and there are no public policies. Application access currently goes through server-only code using the Supabase secret key.
 
@@ -175,6 +189,16 @@ npm run build
 ```
 
 GitHub Actions runs the same checks with Node.js 22 on pull requests and pushes to `main`.
+
+### Manual staging verification after migration deployment
+
+1. Upload a test CSV containing one new person, one deterministic reuse, two rows sharing one Instagram identifier, and one invalid row.
+2. Confirm preview counts and verify that no central `people` records were created.
+3. Exclude one duplicate row, resolve the other duplicate as a new person, and resolve any candidate ambiguity explicitly.
+4. Confirm the commit summary lists eligible, invalid and excluded counts, then commit once.
+5. Verify eligible rows link to central people, invalid/excluded rows remain historical and uncommitted, and imported contacts keep both consent fields at `unknown`.
+6. Submit commit again and confirm the batch remains unchanged.
+7. In a fresh preview, create a conflicting central identity after preview but before commit; confirm commit is blocked and no partial people/contact rows appear.
 
 ## Project rules
 
