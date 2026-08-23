@@ -1,0 +1,6 @@
+full_name,email,gender,city,instagram,source
+Phase 1 Existing,phase1-final-e2e-20260815@example.com,male,New York,,phase2_preview_test
+Preview New,phase2-preview-new@example.com,female,New York,phase2previewnew,phase2_preview_test
+Preview Duplicate A,,female,New York,same.preview.handle,phase2_preview_test
+Preview Duplicate B,,female,New York,same.preview.handle,phase2_preview_test
+Preview Invalid,not-an-email,female,New York,phase2previewinvalid,phase2_preview_test

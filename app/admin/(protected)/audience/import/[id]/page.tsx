@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 
 import { validateAdminId } from "@/lib/admin/events";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { discardAudienceImportPreviewAction } from "../actions";
+import { commitAudienceImportAction, discardAudienceImportPreviewAction } from "../actions";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +35,16 @@ type PreviewRow = {
 type PersonRow = { id: string; full_name: string; email: string | null };
 
 const DECISIONS = ["new_person", "reuse_person", "review", "invalid", "committed"] as const;
+const PAGE_SIZE = 100;
+
+function firstParam(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function pageNumber(value: string | string[] | undefined): number {
+  const parsed = Number.parseInt(firstParam(value) ?? "1", 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 1;
+}
 
 function decisionClass(decision: PreviewRow["decision"]): string {
   if (decision === "new_person") return "bg-emerald-50 text-emerald-800 ring-emerald-200";
@@ -57,9 +67,12 @@ function formatDate(value: string): string {
   }).format(new Date(value));
 }
 
-export default async function AudienceImportPreviewPage({ params }: PreviewPageProps) {
+export default async function AudienceImportPreviewPage({ params, searchParams }: PreviewPageProps) {
   const batchId = validateAdminId((await params).id);
   if (!batchId) notFound();
+  const query = await searchParams;
+  const page = pageNumber(query.page);
+  const offset = (page - 1) * PAGE_SIZE;
 
   const supabase = createSupabaseServerClient();
   const [{ data: batch, error: batchError }, { data: rows, error: rowsError }, ...countResults] =
@@ -74,7 +87,7 @@ export default async function AudienceImportPreviewPage({ params }: PreviewPageP
         .select("id,row_number,normalized_data,decision,candidate_person_ids,errors")
         .eq("batch_id", batchId)
         .order("row_number", { ascending: true })
-        .limit(500),
+        .range(offset, offset + PAGE_SIZE - 1),
       ...DECISIONS.map((decision) =>
         supabase
           .from("audience_import_rows")
@@ -94,6 +107,8 @@ export default async function AudienceImportPreviewPage({ params }: PreviewPageP
   const counts = Object.fromEntries(
     DECISIONS.map((decision, index) => [decision, countResults[index].count ?? 0]),
   ) as Record<(typeof DECISIONS)[number], number>;
+  const totalPages = Math.max(1, Math.ceil(typedBatch.row_count / PAGE_SIZE));
+  if (page > totalPages) notFound();
 
   const candidateIds = Array.from(new Set(typedRows.flatMap((row) => row.candidate_person_ids)));
   let people: PersonRow[] = [];
@@ -151,6 +166,37 @@ export default async function AudienceImportPreviewPage({ params }: PreviewPageP
         review will require an explicit identity decision before the import can be committed.
       </div>
 
+      {firstParam(query.error) === "commit" ? (
+        <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+          The import was not committed. The database rejected the batch without applying a partial commit. Review the
+          preview and try again.
+        </div>
+      ) : null}
+
+      {firstParam(query.committed) ? (
+        <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+          {firstParam(query.committed) === "existing"
+            ? "This exact file was already committed; the existing committed batch is shown."
+            : `Import committed: ${firstParam(query.created) ?? "0"} people created, ${firstParam(query.reused) ?? "0"} reused, ${firstParam(query.review) ?? "0"} queued for review.`}
+        </div>
+      ) : null}
+
+      {typedBatch.status === "preview" ? (
+        <form action={commitAudienceImportAction} className="mt-4 rounded-xl border border-stone-200 bg-white p-4 shadow-sm">
+          <input name="batch_id" type="hidden" value={typedBatch.id} />
+          <label className="flex items-start gap-3 text-sm text-stone-700">
+            <input className="mt-1" name="confirmed" required type="checkbox" value="yes" />
+            <span>
+              I reviewed this preview and explicitly approve committing its clean rows. Invalid rows stay uncommitted;
+              conflict rows are sent to identity review.
+            </span>
+          </label>
+          <button className="mt-3 rounded-lg bg-stone-900 px-4 py-2.5 text-sm font-medium text-white" type="submit">
+            Commit reviewed import
+          </button>
+        </form>
+      ) : null}
+
       <div className="mt-6 overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-stone-200 text-sm">
@@ -169,6 +215,7 @@ export default async function AudienceImportPreviewPage({ params }: PreviewPageP
                 const email = textField(row.normalized_data, "email");
                 const phone = textField(row.normalized_data, "phone");
                 const instagram = textField(row.normalized_data, "instagram");
+                const telegram = textField(row.normalized_data, "telegram");
                 const linkedin = textField(row.normalized_data, "linkedin");
                 const candidates = row.candidate_person_ids
                   .map((id) => peopleById.get(id))
@@ -189,8 +236,9 @@ export default async function AudienceImportPreviewPage({ params }: PreviewPageP
                       {email ? <p>{email}</p> : null}
                       {phone ? <p>{phone}</p> : null}
                       {instagram ? <p>IG: {instagram}</p> : null}
+                      {telegram ? <p>Telegram: {telegram}</p> : null}
                       {linkedin ? <p>LinkedIn: {linkedin}</p> : null}
-                      {!email && !phone && !instagram && !linkedin ? <p>—</p> : null}
+                      {!email && !phone && !instagram && !telegram && !linkedin ? <p>—</p> : null}
                     </td>
                     <td className="px-3 py-3 align-top">
                       <span
@@ -216,11 +264,23 @@ export default async function AudienceImportPreviewPage({ params }: PreviewPageP
         </div>
       </div>
 
-      {typedBatch.row_count > typedRows.length ? (
-        <p className="mt-3 text-xs text-amber-700">
-          Preview table shows the first {typedRows.length} rows; decision counts above include the entire import.
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-stone-600">
+        <p>
+          Page {page} of {totalPages} · rows {typedRows.length === 0 ? 0 : offset + 1}–{offset + typedRows.length} of {typedBatch.row_count}
         </p>
-      ) : null}
+        <div className="flex gap-2">
+          {page > 1 ? (
+            <Link className="rounded-lg border border-stone-300 bg-white px-3 py-2 hover:bg-stone-50" href={`?page=${page - 1}`}>
+              ← Previous
+            </Link>
+          ) : null}
+          {page < totalPages ? (
+            <Link className="rounded-lg border border-stone-300 bg-white px-3 py-2 hover:bg-stone-50" href={`?page=${page + 1}`}>
+              Next →
+            </Link>
+          ) : null}
+        </div>
+      </div>
     </section>
   );
 }
