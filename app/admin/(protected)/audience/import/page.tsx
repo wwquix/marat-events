@@ -60,8 +60,8 @@ export default async function AudienceImportPage({ searchParams }: ImportPagePro
         <p className="text-sm font-medium text-stone-500">Phase 2 · Audience database</p>
         <h1 className="mt-1 text-3xl font-semibold tracking-tight text-stone-900">Import audience</h1>
         <p className="mt-2 max-w-3xl text-stone-600">
-          Upload a CSV to create a preview. Previewing does not create or update central people records. Exact email,
-          phone, Instagram and LinkedIn identifiers are used for deterministic matching; names alone are never merged.
+          Upload a CSV to create a preview. Previewing does not create or update central people records. Only normalized
+          email and phone values are used for deterministic matching; names and social handles are never merged.
         </p>
       </div>
 
@@ -114,7 +114,7 @@ export default async function AudienceImportPage({ searchParams }: ImportPagePro
           <p className="mt-1 leading-6">
             <code>full_name</code> (required), <code>email</code>, <code>phone</code>, <code>gender</code>, <code>city</code>,
             {" "}<code>occupation</code>, <code>education</code>, <code>profile_url</code>, <code>instagram</code>,
-            {" "}<code>linkedin</code>, <code>source</code>, <code>source_reference</code>.
+            {" "}<code>telegram</code>, <code>linkedin</code>, <code>source</code>, <code>source_reference</code>.
           </p>
           <p className="mt-2 text-xs text-stone-500">
             Common aliases such as name, location, job, university, instagram_url and linkedin_url are accepted. Max

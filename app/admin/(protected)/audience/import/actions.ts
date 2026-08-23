@@ -1,22 +1,25 @@
 "use server";
 
+import { createHash } from "node:crypto";
 import { redirect } from "next/navigation";
 
 import {
-  classifyAudienceRows,
-  csvRecords,
+  commitImport,
   identityKey,
-  type ContactChannel,
+  normalizePhone,
+  validateImport,
+  type AudienceImportCommitResult,
   type ExistingIdentityIndex,
+  type TrustedIdentityChannel,
 } from "@/lib/audience/import";
 import { validateAdminId } from "@/lib/admin/events";
 import { requireAdminSession } from "@/lib/admin/session";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
-const IDENTITY_CHANNELS: ContactChannel[] = ["email", "phone", "instagram", "linkedin"];
+const IDENTITY_CHANNELS: TrustedIdentityChannel[] = ["email", "phone"];
 const PAGE_SIZE = 1000;
 
-type PersonIdentityRow = { id: string; email: string | null };
+type PersonIdentityRow = { id: string; email: string | null; phone: string | null };
 type ContactIdentityRow = { person_id: string; channel: string; normalized_value: string };
 
 function importHomePath(error?: string): string {
@@ -46,7 +49,7 @@ async function loadAllPeople(): Promise<PersonIdentityRow[]> {
   for (let start = 0; ; start += PAGE_SIZE) {
     const { data, error } = await supabase
       .from("people")
-      .select("id,email")
+      .select("id,email,phone")
       .order("id", { ascending: true })
       .range(start, start + PAGE_SIZE - 1);
 
@@ -90,13 +93,17 @@ async function buildExistingIdentityIndex(): Promise<ExistingIdentityIndex> {
     if (person.email) {
       addIdentity(index, identityKey("email", person.email.trim().toLowerCase()), person.id);
     }
+    const phone = normalizePhone(person.phone ?? undefined);
+    if (phone) {
+      addIdentity(index, identityKey("phone", phone.normalized), person.id);
+    }
   }
 
   for (const contact of contacts) {
-    if (!IDENTITY_CHANNELS.includes(contact.channel as ContactChannel)) continue;
+    if (!IDENTITY_CHANNELS.includes(contact.channel as TrustedIdentityChannel)) continue;
     addIdentity(
       index,
-      identityKey(contact.channel as ContactChannel, contact.normalized_value),
+      identityKey(contact.channel as TrustedIdentityChannel, contact.normalized_value),
       contact.person_id,
     );
   }
@@ -118,12 +125,22 @@ export async function createAudienceImportPreviewAction(formData: FormData) {
     redirect(importHomePath("invalid"));
   }
 
-  let records: Record<string, string>[];
-  let prepared: ReturnType<typeof classifyAudienceRows>;
+  let csvText: string;
+  let fileSha256: string;
+  let preview: ReturnType<typeof validateImport>;
+  let existingIdentities: ExistingIdentityIndex;
 
   try {
-    records = csvRecords(await upload.text());
-    prepared = classifyAudienceRows(records, await buildExistingIdentityIndex());
+    existingIdentities = await buildExistingIdentityIndex();
+  } catch {
+    redirect(importHomePath("database"));
+  }
+
+  try {
+    const bytes = Buffer.from(await upload.arrayBuffer());
+    csvText = bytes.toString("utf8");
+    fileSha256 = createHash("sha256").update(bytes).digest("hex");
+    preview = validateImport(csvText, existingIdentities);
   } catch {
     redirect(importHomePath("invalid_csv"));
   }
@@ -136,8 +153,9 @@ export async function createAudienceImportPreviewAction(formData: FormData) {
       source_label: sourceLabel,
       source_reference: sourceReference,
       status: "preview",
-      row_count: prepared.length,
+      row_count: preview.rows.length,
       created_by: session.email,
+      file_sha256: fileSha256,
     })
     .select("id")
     .single();
@@ -147,7 +165,7 @@ export async function createAudienceImportPreviewAction(formData: FormData) {
   }
 
   const batchId = batch.id;
-  const databaseRows = prepared.map((row) => ({
+  const databaseRows = preview.rows.map((row) => ({
     batch_id: batchId,
     row_number: row.rowNumber,
     raw_data: row.raw,
@@ -166,6 +184,61 @@ export async function createAudienceImportPreviewAction(formData: FormData) {
   }
 
   redirect(`/admin/audience/import/${batchId}`);
+}
+
+function parseCommitResult(value: unknown): AudienceImportCommitResult {
+  if (!value || typeof value !== "object") throw new Error("Invalid audience import commit result.");
+  const result = value as Record<string, unknown>;
+  if (
+    typeof result.batchId !== "string" ||
+    typeof result.alreadyCommitted !== "boolean" ||
+    typeof result.createdPeople !== "number" ||
+    typeof result.reusedPeople !== "number" ||
+    typeof result.reviewRows !== "number"
+  ) {
+    throw new Error("Invalid audience import commit result.");
+  }
+
+  return {
+    batchId: result.batchId,
+    alreadyCommitted: result.alreadyCommitted,
+    createdPeople: result.createdPeople,
+    reusedPeople: result.reusedPeople,
+    reviewRows: result.reviewRows,
+  };
+}
+
+export async function commitAudienceImportAction(formData: FormData) {
+  await requireAdminSession();
+  const batchId = validateAdminId(formData.get("batch_id"));
+  const confirmed = formData.get("confirmed") === "yes";
+  if (!batchId || !confirmed) redirect(importHomePath("invalid"));
+
+  let result: AudienceImportCommitResult;
+  try {
+    result = await commitImport(
+      {
+        async commitBatch(id) {
+          const { data, error } = await createSupabaseServerClient().rpc("commit_audience_import", {
+            p_batch_id: id,
+          });
+          if (error) throw new Error("Unable to commit audience import.");
+          return parseCommitResult(data);
+        },
+      },
+      { batchId, confirmed: true },
+    );
+  } catch {
+    redirect(`/admin/audience/import/${batchId}?error=commit`);
+  }
+
+  const params = new URLSearchParams({
+    committed: result.alreadyCommitted ? "existing" : "yes",
+    created: String(result.createdPeople),
+    reused: String(result.reusedPeople),
+    review: String(result.reviewRows),
+  });
+  redirect(`/admin/audience/import/${result.batchId}?${params.toString()}`);
 }
 
 export async function discardAudienceImportPreviewAction(formData: FormData) {
