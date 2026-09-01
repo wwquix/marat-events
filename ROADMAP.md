@@ -124,16 +124,16 @@ Goal: load the existing ~600-person audience and manage invitations safely.
 - deterministic dedupe on trusted identifiers, never by name alone — complete for preview and commit;
 - explicit review resolution to reuse, create or exclude — complete;
 - atomic, retry-safe PostgreSQL commit with current-state identity revalidation — complete;
-- staging E2E verification of review resolution and commit — pending after migration deployment;
+- staging migration deployed; E2E verification of review resolution and commit remains pending;
 - operational validation with the full real-audience import remains pending.
 
-### 2.3 Segmentation and invite targeting
+### 2.3 Segmentation and invite targeting — COMPLETE
 - event audience/segment selection;
 - eligible/ineligible reasoning;
 - no invite to suppressed/opted-out contacts;
 - source and campaign attribution.
 
-### 2.4 Safe outbound architecture
+### 2.4 Safe outbound architecture — COMPLETE
 Before any real provider sends messages:
 - Policy Engine;
 - Outbox;

@@ -212,3 +212,6 @@ See [`AGENTS.md`](./AGENTS.md) and [`ROADMAP.md`](./ROADMAP.md). Important rules
 - ambiguous identity conflicts require human review;
 - before real automated outbound messaging, sends must go through deterministic policy checks, Outbox, AuditLog, DRY_RUN, consent/channel checks and idempotent processing;
 - LLM output must not directly send messages or mutate payment/matching/identity state.
+# Phase 2.4 outbound safety
+
+Outbound is provider-independent in this phase. Admin DRY_RUN and enqueue use PostgreSQL's authoritative policy engine: explicit opt-in, reachable contact, no person suppression or identity review, and Monday-Friday 09:00-18:00 America/New_York. DRY_RUN persists evaluations but creates no outbox rows and sends nothing; enqueue only records durable queue state. All privileged RPCs are service-role-only, RLS-protected, and audited. Future LLM output may propose draft content only: it must never enqueue, claim, transition, send, alter consent/suppression/identity/payment/matching, process callbacks, or mark a message sent.

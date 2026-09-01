@@ -44,6 +44,7 @@ type RegistrationRow = {
   age: number | null;
   gender: string | null;
   source: string | null;
+  invitation_campaign_id: string | null;
   amount_cents: number;
   currency: string;
   payment_status: string;
@@ -78,6 +79,7 @@ export default async function RegistrationPage({ params }: RegistrationPageProps
       "age",
       "gender",
       "source",
+      "invitation_campaign_id",
       "amount_cents",
       "currency",
       "payment_status",
@@ -123,6 +125,7 @@ export default async function RegistrationPage({ params }: RegistrationPageProps
           <Definition label="Gender" value={registration.gender ?? "—"} />
           <Definition label="Age" value={registration.age?.toString() ?? "—"} />
           <Definition label="Source" value={registration.source ?? "—"} />
+          <Definition label="Invitation campaign" value={registration.invitation_campaign_id ?? "—"} mono />
           <Definition label="Created" value={formatAdminDateTime(registration.created_at)} />
         </Card>
 

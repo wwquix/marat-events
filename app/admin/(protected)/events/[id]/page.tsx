@@ -111,6 +111,18 @@ export default async function EventAdminPage({ params, searchParams }: EventAdmi
         </div>
         <div className="flex flex-wrap gap-2">
           <Link
+            className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50"
+            href={`/admin/events/${eventId}/audience`}
+          >
+            Build audience
+          </Link>
+          <Link
+            className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50"
+            href={`/admin/events/${eventId}/outbound`}
+          >
+            Outbound
+          </Link>
+          <Link
             className="rounded-lg bg-stone-900 px-3 py-2 text-sm font-medium text-white hover:bg-stone-800"
             href={`/admin/events/${eventId}/attendees`}
           >
