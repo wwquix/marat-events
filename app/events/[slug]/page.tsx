@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 
+import { parseInvitationToken } from "@/lib/invitations/token";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -27,7 +28,10 @@ type TicketTypeRow = {
 
 type EventPageProps = {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ checkout_error?: string | string[] }>;
+  searchParams: Promise<{
+    checkout_error?: string | string[];
+    invite?: string | string[];
+  }>;
 };
 
 const EVENT_FIELDS = "id,slug,title,description,venue,starts_at,capacity,status";
@@ -125,13 +129,19 @@ const CHECKOUT_ERROR_MESSAGES: Record<string, string> = {
 
 export default async function EventPage({ params, searchParams }: EventPageProps) {
   const { slug } = await params;
-  const { checkout_error: checkoutErrorParam } = await searchParams;
+  const {
+    checkout_error: checkoutErrorParam,
+    invite: invitationParam,
+  } = await searchParams;
   const checkoutErrorCode = Array.isArray(checkoutErrorParam)
     ? checkoutErrorParam[0]
     : checkoutErrorParam;
   const checkoutError = checkoutErrorCode
     ? CHECKOUT_ERROR_MESSAGES[checkoutErrorCode]
     : undefined;
+  const invitationToken = parseInvitationToken(
+    Array.isArray(invitationParam) ? invitationParam[0] : invitationParam,
+  );
   let event: unknown;
   let ticketTypes: unknown[] = [];
   let hasOperationalFailure = false;
@@ -224,6 +234,9 @@ export default async function EventPage({ params, searchParams }: EventPageProps
         ) : (
           <form action="/api/checkout" className="space-y-5" method="post">
             <input name="slug" type="hidden" value={event.slug} />
+            {invitationToken ? (
+              <input name="invite_token" type="hidden" value={invitationToken} />
+            ) : null}
 
             {checkoutError ? (
               <p

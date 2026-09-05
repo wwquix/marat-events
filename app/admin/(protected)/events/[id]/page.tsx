@@ -116,6 +116,24 @@ export default async function EventAdminPage({ params, searchParams }: EventAdmi
           >
             Attendees
           </Link>
+          <Link
+            className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50"
+            href={`/admin/check-in/${eventId}`}
+          >
+            Check-in
+          </Link>
+          <Link
+            className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50"
+            href={`/admin/matching/${eventId}`}
+          >
+            Matching
+          </Link>
+          <Link
+            className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50"
+            href={`/admin/analytics/${eventId}`}
+          >
+            Analytics
+          </Link>
           <a
             className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50"
             href={`/events/${typedEvent.slug}`}
