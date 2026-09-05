@@ -1,5 +1,6 @@
 "use client";
 
+import type { CSSProperties } from "react";
 import { useMemo, useState } from "react";
 
 import styles from "./visual-mvp-demo.module.css";
@@ -13,7 +14,7 @@ type Candidate = {
   initials: string;
   detail: string;
   tags: string[];
-  accent: string;
+  accent: "rose" | "violet" | "amber";
 };
 
 const navigation: Array<{ id: DemoView; label: string; eyebrow: string }> = [
@@ -364,6 +365,7 @@ function MatchingView() {
   const [liked, setLiked] = useState<string[]>([]);
   const [showMatch, setShowMatch] = useState(false);
   const candidate = candidates[candidateIndex % candidates.length];
+  const accentClass = candidate.accent === "rose" ? styles.accentRose : candidate.accent === "violet" ? styles.accentViolet : styles.accentAmber;
 
   function nextCandidate() {
     setCandidateIndex((value) => (value + 1) % candidates.length);
@@ -391,9 +393,9 @@ function MatchingView() {
 
       <div className={styles.matchingGrid}>
         <div className={styles.profileStage}>
-          <div className={`${styles.profileBackdrop} ${styles[`accent${candidate.accent[0].toUpperCase()}${candidate.accent.slice(1)}`]}`} />
+          <div className={`${styles.profileBackdrop} ${accentClass}`} />
           <article className={styles.profileCard} key={candidate.name}>
-            <div className={`${styles.profilePortrait} ${styles[`accent${candidate.accent[0].toUpperCase()}${candidate.accent.slice(1)}`]}`}>
+            <div className={`${styles.profilePortrait} ${accentClass}`}>
               <span>{candidate.initials}</span>
               <small>Met tonight</small>
             </div>
@@ -485,7 +487,7 @@ function AdminView() {
         </article>
         <article className={styles.kpiCard}>
           <span>Checked in</span><strong>{checkedInCount}</strong><small>{checkinPercent}% of paid guests</small>
-          <div className={styles.radial} style={{ "--progress": `${checkinPercent * 3.6}deg` } as React.CSSProperties}><span>{checkinPercent}%</span></div>
+          <div className={styles.radial} style={{ "--progress": `${checkinPercent * 3.6}deg` } as CSSProperties}><span>{checkinPercent}%</span></div>
         </article>
         <article className={styles.kpiCard}>
           <span>Invitations</span><strong>{invitesSent}</strong><small>42.1% registration conversion</small>
