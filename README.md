@@ -215,3 +215,5 @@ See [`AGENTS.md`](./AGENTS.md) and [`ROADMAP.md`](./ROADMAP.md). Important rules
 # Phase 2.4 outbound safety
 
 Outbound is provider-independent in this phase. Admin DRY_RUN and enqueue use PostgreSQL's authoritative policy engine: explicit opt-in, reachable contact, no person suppression or identity review, and Monday-Friday 09:00-18:00 America/New_York. DRY_RUN persists evaluations but creates no outbox rows and sends nothing; enqueue only records durable queue state. All privileged RPCs are service-role-only, RLS-protected, and audited. Future LLM output may propose draft content only: it must never enqueue, claim, transition, send, alter consent/suppression/identity/payment/matching, process callbacks, or mark a message sent.
+#   D a y t i n g  
+ 
